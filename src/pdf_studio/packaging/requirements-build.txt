@@ -1,0 +1,4 @@
+# Pinned, tested versions for building the Windows bundle (clean uv venv).
+PyQt6==6.11.0
+pymupdf==1.28.2
+pyinstaller==6.22.3

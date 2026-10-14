@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# build output (PyInstaller, uv build venv, release zips)
+build/
+dist/
+*.spec
+*.zip
+
+# generated test documents (recreated by the tests)
+src/pdf_studio/tests/fixtures/*.pdf
+
+# local files
+.env
+*.log

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf-studio"
+version = "0.1.0"
+description = "Desktop PDF viewer and editor: annotate, organize pages, edit text and images, sign."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PyQt6>=6.6",
+    "pymupdf>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+pdf-studio = "pdf_studio.main:main"
+
+[project.gui-scripts]
+pdf-studiow = "pdf_studio.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pdf_studio*"]
+
+[tool.setuptools.package-data]
+pdf_studio = ["docs/*.md", "packaging/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/pdf_studio/tests"]
