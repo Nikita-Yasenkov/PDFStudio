@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdf-studio"
-version = "0.1.0"
+dynamic = ["version"]  # from pdf_studio.__version__, the one place to bump it
 description = "Desktop PDF viewer and editor: annotate, organize pages, edit text and images, sign."
 readme = "README.md"
 license = "AGPL-3.0-only"
@@ -26,6 +26,9 @@ pdf-studio = "pdf_studio.main:main"
 
 [project.gui-scripts]
 pdf-studiow = "pdf_studio.main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "pdf_studio.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

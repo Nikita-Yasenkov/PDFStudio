@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,39 @@ EXCLUDES = [
     # our own test suite
     "pdf_studio.tests", "pytest",
 ]
+
+
+def make_version_file(path: str) -> str:
+    """Windows version resource: Properties → Details shows name and version."""
+    from pdf_studio import APP_NAME, __version__
+    from pdf_studio.integration.windows import PUBLISHER
+
+    nums = tuple((int(n) for n in re.findall(r"\d+", __version__)[:4]))
+    nums += (0,) * (4 - len(nums))
+    strings = {
+        "CompanyName": PUBLISHER,
+        "FileDescription": APP_NAME,
+        "FileVersion": __version__,
+        "InternalName": NAME,
+        "LegalCopyright": "PDF Studio contributors. Licensed under the AGPL-3.0.",
+        "OriginalFilename": f"{NAME}.exe",
+        "ProductName": APP_NAME,
+        "ProductVersion": __version__,
+    }
+    table = ",\n".join(f"        StringStruct({k!r}, {v!r})" for k, v in strings.items())
+    text = f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers={nums}, prodvers={nums}, mask=0x3f, flags=0x0,
+                    OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+{table}])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])]),
+  ]
+)
+"""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return path
 
 
 def make_icon(path: str) -> str:
@@ -67,6 +101,7 @@ def build(dist: str, work: str, clean: bool = True) -> str:
         sys.exit("PyInstaller is not installed: pip install pyinstaller")
     os.makedirs(work, exist_ok=True)
     icon = make_icon(os.path.join(work, "pdf_studio.ico"))
+    version_file = make_version_file(os.path.join(work, "version_info.txt"))
     entry = os.path.join(work, "pdf_studio_entry.py")
     with open(entry, "w", encoding="utf-8") as f:
         f.write("import sys\nfrom pdf_studio.ui.app import main\nsys.exit(main())\n")
@@ -77,6 +112,8 @@ def build(dist: str, work: str, clean: bool = True) -> str:
         "--onedir",
         "--noconfirm",
         "--icon", icon,
+        "--version-file", version_file,
+        "--noupx",  # packed executables are a classic antivirus false-positive trigger
         "--paths", SRC,
         "--distpath", dist,
         "--workpath", os.path.join(work, "pyi"),

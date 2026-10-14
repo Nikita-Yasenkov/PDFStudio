@@ -1,0 +1,77 @@
+# Test, build and release PDF Studio.
+#
+# Every push and pull request: run the tests, build the Windows app, run the
+# bundle's self-test and attach PDFStudio-win64.zip to the run.
+#
+# On main, when src/pdf_studio/__init__.py has a version that isn't released
+# yet: also publish GitHub release v<version> with the zip, using that
+# version's CHANGELOG.md section as notes. Pushes that keep the version only
+# build, so nothing is released twice.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Test, build, release
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write  # create the release and its tag
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip uv
+          python -m pip install -e ".[dev]"
+
+      - name: Test
+        run: python -m pytest -q
+
+      - name: Build the app and run its self-test
+        shell: pwsh
+        run: .\scripts\build_pdf_studio.ps1 -Smoke -Zip
+
+      - name: Attach the zip to this run
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/PDFStudio-win64.zip
+          archive: false
+          retention-days: 30
+
+      - name: Publish the release (new version only)
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python -c "import pdf_studio; print(pdf_studio.__version__)")
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "v$version is already released. Bump __version__ to publish a new release."
+            exit 0
+          fi
+          python scripts/release_notes.py "$version" dist/PDFStudio-win64.zip > notes.md
+          gh release create "v$version" dist/PDFStudio-win64.zip \
+            --title "PDF Studio $version" --notes-file notes.md --target "$GITHUB_SHA"
+          echo "Published v$version"

@@ -184,6 +184,15 @@ clean uv environment, runs a headless self-test of the bundle, and writes
 .\scripts\build_pdf_studio.ps1 -Smoke -Zip      # add -Install to install it for your user
 ```
 
+**Releasing.** Every push and pull request runs
+[`.github/workflows/build.yml`](.github/workflows/build.yml) on Windows. It
+runs the tests, builds the app, runs its self-test, and attaches the zip to the
+run. To publish a new version, change `__version__` in
+`src/pdf_studio/__init__.py` and add a matching `## <version>` section to
+[`CHANGELOG.md`](CHANGELOG.md) in the same push to `main`. The workflow then
+creates release `v<version>` with the zip and those notes, and the download
+link above serves it. Pushes that keep the version only build.
+
 **Screenshots.** Run `python scripts\make_screenshots.py` to regenerate the
 images in this README from the real app, using a fictional demo contract.
 
