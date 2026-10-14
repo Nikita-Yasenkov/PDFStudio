@@ -19,22 +19,29 @@ import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-INSTALL = """\
-### Get started
-
+WINDOWS = """\
 **Windows** (10 or 11, 64-bit): download **PDFStudio-win64.zip**, unzip it and run \
 `PDFStudio\\PDFStudio.exe`. To add shortcuts and open PDFs with it, use \
 **Help → PDF Studio on This Computer… → Install for this user** (no administrator rights \
-needed). If SmartScreen shows "Windows protected your PC", click **More info → Run anyway**.
+needed). If SmartScreen shows "Windows protected your PC", click **More info → Run anyway**."""
 
+MACOS = """\
 **macOS** (13 Ventura or later): download the disk image for your Mac \
 (**arm64** for Apple silicon, **x86_64** for Intel), open it and drag PDF Studio to \
-Applications. The app isn't notarized by Apple yet, so the first time macOS says it can't \
-verify it: open **System Settings → Privacy & Security**, scroll down and click \
-**Open Anyway**.
+Applications."""
 
+MACOS_NOT_NOTARIZED = """ \
+This build isn't notarized by Apple, so the first time macOS says it can't verify it: open \
+**System Settings → Privacy & Security**, scroll down and click **Open Anyway**."""
+
+UPDATING = """\
 **Updating:** close PDF Studio and install the new version the same way. Your settings and \
 saved signatures are kept."""
+
+
+def install_text(mac_notarized: bool) -> str:
+    mac = MACOS if mac_notarized else MACOS + MACOS_NOT_NOTARIZED
+    return f"### Get started\n\n{WINDOWS}\n\n{mac}\n\n{UPDATING}"
 
 
 def changelog_section(version: str, path: str = os.path.join(ROOT, "CHANGELOG.md")) -> str:
@@ -54,9 +61,10 @@ def sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def notes(version: str, files: list) -> str:
+def notes(version: str, files: list, mac_notarized: bool = False) -> str:
     sums = "\n".join(f"- `{os.path.basename(p)}`: `{sha256(p)}`" for p in sorted(files))
-    return f"{changelog_section(version)}\n\n{INSTALL}\n\n**SHA-256**\n\n{sums}\n"
+    return (f"{changelog_section(version)}\n\n{install_text(mac_notarized)}\n\n"
+            f"**SHA-256**\n\n{sums}\n")
 
 
 def main() -> int:
@@ -64,6 +72,8 @@ def main() -> int:
     ap.add_argument("version")
     ap.add_argument("files", nargs="*", help="release assets to list with their SHA-256")
     ap.add_argument("--check", action="store_true", help="only check that the notes exist")
+    ap.add_argument("--mac-notarized", action="store_true",
+                    help="the macOS apps are notarized (no Open Anyway step)")
     args = ap.parse_args()
     if args.check:
         changelog_section(args.version)
@@ -72,7 +82,7 @@ def main() -> int:
     if not args.files:
         ap.error("give the release files, or use --check")
     sys.stdout.reconfigure(encoding="utf-8")
-    sys.stdout.write(notes(args.version, args.files))
+    sys.stdout.write(notes(args.version, args.files, args.mac_notarized))
     return 0
 
 

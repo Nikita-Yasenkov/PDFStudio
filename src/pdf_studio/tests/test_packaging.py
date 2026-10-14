@@ -41,6 +41,26 @@ def test_macos_info_plist(tmp_path):
     assert doc["LSItemContentTypes"] == ["com.adobe.pdf"] and doc["CFBundleTypeRole"] == "Editor"
 
 
+def test_macos_entitlements_file(tmp_path):
+    path = build_macos.write_entitlements(str(tmp_path))
+    assert plistlib.loads(open(path, "rb").read()) == build_macos.ENTITLEMENTS
+
+
+def test_notary_credentials(monkeypatch):
+    for name in ("PDF_STUDIO_NOTARY_PROFILE", "PDF_STUDIO_NOTARY_KEY",
+                 "PDF_STUDIO_NOTARY_KEY_ID", "PDF_STUDIO_NOTARY_ISSUER"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PDF_STUDIO_NOTARY_KEY", "/tmp/AuthKey.p8")
+    with pytest.raises(SystemExit, match="PDF_STUDIO_NOTARY_KEY_ID, PDF_STUDIO_NOTARY_ISSUER"):
+        build_macos.notary_auth()  # names exactly what is missing
+    monkeypatch.setenv("PDF_STUDIO_NOTARY_KEY_ID", "ABC123")
+    monkeypatch.setenv("PDF_STUDIO_NOTARY_ISSUER", "issuer-uuid")
+    assert build_macos.notary_auth() == ["--key", "/tmp/AuthKey.p8", "--key-id", "ABC123",
+                                         "--issuer", "issuer-uuid"]
+    monkeypatch.setenv("PDF_STUDIO_NOTARY_PROFILE", "pdf-studio")  # a stored profile wins
+    assert build_macos.notary_auth() == ["--keychain-profile", "pdf-studio"]
+
+
 class _FileOpenEvent:
     """Stands in for QFileOpenEvent, which PyQt can't construct."""
 

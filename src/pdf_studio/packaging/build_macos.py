@@ -4,15 +4,24 @@ Usage (repo root, on a Mac)::
 
     python -m pdf_studio.packaging.build_macos            # build
     python -m pdf_studio.packaging.build_macos --smoke    # build + self-test
+    python -m pdf_studio.packaging.build_macos --smoke --notarize
 
 Output: ``dist/PDF Studio.app`` and the disk image
 ``dist/PDFStudio-macos-<arch>.dmg`` (arm64 on Apple silicon, x86_64 on Intel).
-The app is ad-hoc signed; notarized releases need an Apple Developer ID.
+
+Signing: with ``PDF_STUDIO_SIGN_IDENTITY`` set to a "Developer ID Application:
+…" identity in the keychain, the app and the disk image are signed with it
+(hardened runtime, secure timestamp); otherwise the app is ad-hoc signed.
+``--notarize`` then has Apple notarize the disk image and staples the ticket,
+using either ``PDF_STUDIO_NOTARY_PROFILE`` (a ``notarytool store-credentials``
+profile) or an App Store Connect API key: ``PDF_STUDIO_NOTARY_KEY`` (path to
+the .p8 file), ``PDF_STUDIO_NOTARY_KEY_ID`` and ``PDF_STUDIO_NOTARY_ISSUER``.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import plistlib
@@ -21,12 +30,16 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import List, Optional
 
 from .build_windows import ROOT, pyinstaller_args, smoke
 
 BUNDLE_ID = "io.github.nikita-yasenkov.pdfstudio"
 MIN_MACOS = "13.0"  # Qt 6.11's oldest supported macOS
 COPYRIGHT = "PDF Studio contributors. Licensed under the AGPL-3.0."
+# Hardened runtime exceptions (Developer ID builds): Python's ctypes/libffi may
+# create small executable trampolines at run time.
+ENTITLEMENTS = {"com.apple.security.cs.allow-unsigned-executable-memory": True}
 
 
 def app_name() -> str:
@@ -92,25 +105,41 @@ def update_info_plist(path: str) -> dict:
     return info
 
 
-def sign(app: str) -> None:
-    """Ad-hoc sign again: editing Info.plist invalidated PyInstaller's signature."""
-    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", app], check=True)
-    subprocess.run(["codesign", "--verify", "--deep", "--strict", app], check=True)
+def write_entitlements(work: str) -> str:
+    path = os.path.join(work, "entitlements.plist")
+    with open(path, "wb") as f:
+        plistlib.dump(ENTITLEMENTS, f)
+    return path
 
 
-def build(dist: str, work: str, clean: bool = True) -> str:
+def sign_app(app: str, identity: Optional[str], entitlements: str) -> None:
+    """Sign the bundle again, the way PyInstaller does: editing Info.plist
+    invalidated its signature. PyInstaller already signed every binary inside."""
+    if identity:
+        cmd = ["codesign", "--force", "--deep", "--timestamp", "--options", "runtime",
+               "--entitlements", entitlements, "--sign", identity, app]
+    else:
+        cmd = ["codesign", "--force", "--deep", "--sign", "-", app]
+    subprocess.run(cmd, check=True)
+    subprocess.run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", app], check=True)
+
+
+def build(dist: str, work: str, identity: Optional[str] = None, clean: bool = True) -> str:
     try:
         import PyInstaller.__main__ as pyi
     except ImportError:
         sys.exit("PyInstaller is not installed: pip install pyinstaller")
     args = pyinstaller_args(app_name(), dist, work, clean)
     args += ["--icon", make_icns(work), "--osx-bundle-identifier", BUNDLE_ID]
+    entitlements = write_entitlements(work)
+    if identity:
+        args += ["--codesign-identity", identity, "--osx-entitlements-file", entitlements]
     pyi.run(args)
     app = os.path.join(dist, f"{app_name()}.app")
     if not os.path.isdir(app):
         sys.exit(f"Build finished but {app} is missing")
     update_info_plist(os.path.join(app, "Contents", "Info.plist"))
-    sign(app)
+    sign_app(app, identity, entitlements)
     return app
 
 
@@ -132,16 +161,55 @@ def make_dmg(app: str, dist: str) -> str:
     sys.exit("hdiutil could not create the disk image")
 
 
+def notary_auth() -> List[str]:
+    profile = os.environ.get("PDF_STUDIO_NOTARY_PROFILE")
+    if profile:
+        return ["--keychain-profile", profile]
+    names = ("PDF_STUDIO_NOTARY_KEY", "PDF_STUDIO_NOTARY_KEY_ID", "PDF_STUDIO_NOTARY_ISSUER")
+    missing = [n for n in names if not os.environ.get(n)]
+    if missing:
+        sys.exit(f"--notarize needs PDF_STUDIO_NOTARY_PROFILE, or {', '.join(missing)}")
+    key, key_id, issuer = (os.environ[n] for n in names)
+    return ["--key", key, "--key-id", key_id, "--issuer", issuer]
+
+
+def notarize(path: str) -> None:
+    """Have Apple notarize the disk image (and the app inside), then staple
+    the ticket so Gatekeeper accepts it even offline."""
+    auth = notary_auth()
+    p = subprocess.run(["xcrun", "notarytool", "submit", path, *auth, "--wait",
+                        "--output-format", "json"], capture_output=True, text=True)
+    try:
+        result = json.loads(p.stdout)
+    except ValueError:
+        result = {}
+    print(f"Notarization: {result.get('status', 'no result')} (id {result.get('id', '-')})")
+    if result.get("status") != "Accepted":
+        if result.get("id"):  # Apple's list of what to fix
+            subprocess.run(["xcrun", "notarytool", "log", result["id"], *auth])
+        sys.exit(f"Notarization failed: {(p.stderr or p.stdout).strip()}")
+    subprocess.run(["xcrun", "stapler", "staple", path], check=True)
+    subprocess.run(["spctl", "--assess", "--type", "open", "--context",
+                    "context:primary-signature", "--verbose=2", path], check=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dist", default=os.path.join(ROOT, "dist"))
     ap.add_argument("--work", default=os.path.join(tempfile.gettempdir(), "pdf-studio-build"))
     ap.add_argument("--smoke", action="store_true", help="run the bundled app's self-test")
+    ap.add_argument("--notarize", action="store_true",
+                    help="notarize and staple the disk image (needs a signing identity)")
     args = ap.parse_args()
     if sys.platform != "darwin":
         sys.exit("build_macos runs on macOS; use build_windows on Windows")
-    app = build(args.dist, args.work)
-    print(f"Built {app}")
+    identity = os.environ.get("PDF_STUDIO_SIGN_IDENTITY") or None
+    if args.notarize and not identity:
+        sys.exit("--notarize needs PDF_STUDIO_SIGN_IDENTITY (a Developer ID Application identity)")
+    if args.notarize:
+        notary_auth()  # fail before the long build when credentials are missing
+    app = build(args.dist, args.work, identity)
+    print(f"Built {app} ({'signed: ' + identity if identity else 'ad-hoc signed'})")
     if args.smoke:
         from pdf_studio.tests.fixtures.make_fixtures import ensure_fixtures
         exe = os.path.join(app, "Contents", "MacOS", app_name())
@@ -150,7 +218,12 @@ def main() -> int:
             print(f"Smoke test FAILED (exit {code})")
             return code
         print("Smoke test passed")
-    print(f"Disk image: {make_dmg(app, args.dist)}")
+    dmg = make_dmg(app, args.dist)
+    if identity:
+        subprocess.run(["codesign", "--force", "--timestamp", "--sign", identity, dmg], check=True)
+    if args.notarize:
+        notarize(dmg)
+    print(f"Disk image: {dmg}")
     return 0
 
 

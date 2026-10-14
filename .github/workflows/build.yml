@@ -5,8 +5,9 @@
 # (Windows zip, macOS disk images) to the run.
 #
 # On main, when src/pdf_studio/__init__.py has a version that isn't released
-# yet: also sign the Windows app (once Azure Artifact Signing is set up, see
-# docs/RELEASING.md) and publish GitHub release v<version> with every
+# yet: also sign the Windows app (Azure Artifact Signing) and sign and
+# notarize the macOS apps (Apple Developer ID), each once its secrets are set
+# up (see docs/RELEASING.md), and publish GitHub release v<version> with every
 # download, using that version's CHANGELOG.md section as notes. Pushes that
 # keep the version only build, so nothing is released twice.
 
@@ -147,7 +148,9 @@ jobs:
           - runner: macos-15-intel
             arch: x86_64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      SIGN: ${{ needs.version.outputs.release == 'true' && secrets.MACOS_CERTIFICATE_P12 != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -165,14 +168,55 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+      - name: Load the Developer ID certificate and the notary key
+        if: env.SIGN == 'true'
+        env:
+          CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -f pkcs12 \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -n 1)
+          if [ -z "$identity" ]; then
+            echo "::error::MACOS_CERTIFICATE_P12 has no Developer ID Application certificate with its key"
+            exit 1
+          fi
+          echo "Signing as: $identity"
+          printf '%s\n' "$NOTARY_KEY" > "$RUNNER_TEMP/notary_key.p8"
+          {
+            echo "PDF_STUDIO_SIGN_IDENTITY=$identity"
+            echo "PDF_STUDIO_NOTARY_KEY=$RUNNER_TEMP/notary_key.p8"
+            echo "PDF_STUDIO_NOTARY_KEY_ID=$NOTARY_KEY_ID"
+            echo "PDF_STUDIO_NOTARY_ISSUER=$NOTARY_ISSUER_ID"
+          } >> "$GITHUB_ENV"
+
       - name: Build the app, run its self-test, make the disk image
-        run: bash scripts/build_pdf_studio_macos.sh --smoke
+        run: bash scripts/build_pdf_studio_macos.sh --smoke ${{ env.SIGN == 'true' && '--notarize' || '' }}
 
       - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.arch }}
           path: dist/PDFStudio-macos-${{ matrix.arch }}.dmg
           retention-days: 30
+
+      - name: Remove the signing keychain and key
+        if: always() && env.SIGN == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/notary_key.p8"
 
   release:
     name: Publish release
@@ -193,9 +237,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
+          MAC_NOTARIZED: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
         run: |
           ls -l assets
-          python3 scripts/release_notes.py "$VERSION" assets/* > notes.md
+          flags=()
+          if [ "$MAC_NOTARIZED" = "true" ]; then flags+=(--mac-notarized); fi
+          python3 scripts/release_notes.py "${flags[@]}" "$VERSION" assets/* > notes.md
           gh release create "v$VERSION" assets/* \
             --title "PDF Studio $VERSION" --notes-file notes.md --target "$GITHUB_SHA"
           echo "Published v$VERSION"

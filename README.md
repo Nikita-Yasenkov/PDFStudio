@@ -53,10 +53,11 @@
    [Intel](https://github.com/Nikita-Yasenkov/PDFStudio/releases/latest/download/PDFStudio-macos-x86_64.dmg).
    It needs macOS 13 Ventura or later.
 2. **Open** it and drag **PDF Studio** onto **Applications**.
-3. **Open PDF Studio** from Applications. The app isn't notarized by Apple yet,
-   so the first time macOS says it can't verify it. Open **System Settings →
-   Privacy & Security**, scroll down and click **Open Anyway**. You only do this
-   once.
+3. **Open PDF Studio** from Applications.
+
+> **macOS says it can't verify PDF Studio?** That happens with builds Apple
+> hasn't notarized. Open **System Settings → Privacy & Security**, scroll down
+> and click **Open Anyway**. You only do this once.
 
 **To make it your default PDF app,** select any PDF in Finder, press **⌘I**
 (Get Info), choose PDF Studio under **Open with**, and click **Change All…**.

@@ -9,7 +9,7 @@ workflow**):
 | Job | What it does |
 |---|---|
 | **Windows** | Runs the tests, builds `PDFStudio.exe`, runs its self-test, signs it (releases only, see below) and zips it. |
-| **macOS (arm64, x86_64)** | Runs the tests, builds `PDF Studio.app` on an Apple silicon and an Intel runner, runs its self-test and puts it in a disk image. |
+| **macOS (arm64, x86_64)** | Runs the tests, builds `PDF Studio.app` on an Apple silicon and an Intel runner, signs it (releases only, see below), runs its self-test and puts it in a disk image, which Apple notarizes. |
 | **Publish release** | Only on `main`, and only when `__version__` has no release yet: publishes release `v<version>` with all three downloads. |
 
 Every run attaches its downloads (`windows`, `macos-arm64`, `macos-x86_64`) to
@@ -90,16 +90,81 @@ From the next release on, `PDFStudio.exe` is signed and timestamped, and the
 workflow fails the release if the signature isn't valid. Until
 `AZURE_SIGNING_ENDPOINT` is set, releases go out unsigned.
 
-## macOS
+## macOS signing and notarization (Apple Developer ID)
 
-The disk images contain an ad-hoc signed app. macOS runs it, but because Apple
-hasn't notarized it, people confirm it once: **System Settings → Privacy &
-Security → Open Anyway**.
+Release builds are signed with your *Developer ID Application* certificate
+and notarized by Apple, so macOS opens them without warnings. Without the
+secrets below, the app is ad-hoc signed, and people approve it once in
+**System Settings → Privacy & Security → Open Anyway**. Pull requests and
+other non-release builds are never signed.
 
-To remove that step, the app has to be signed with a *Developer ID
-Application* certificate and notarized by Apple. That needs the Apple
-Developer Program (US$99 a year); Azure signing only covers Windows. The
-workflow doesn't do this yet.
+The certificate shows the name your Apple Developer account is enrolled
+under: your own name for an individual account, or the LLC's legal name for
+an organization account.
+
+### 1. Developer ID Application certificate
+
+Only the account holder can create one. At
+[developer.apple.com](https://developer.apple.com/account/resources/certificates/list)
+→ *Certificates* → **+** → *Developer ID Application* → profile type *G2
+Sub-CA*, upload a certificate signing request (CSR), then download the
+certificate.
+
+**With a Mac:** create the CSR in *Keychain Access → Certificate Assistant →
+Request a Certificate From a Certificate Authority* ("Saved to disk").
+Double-click the downloaded certificate, then in *Keychain Access → My
+Certificates* right-click *Developer ID Application: …* → *Export* → a `.p12`
+file with a password.
+
+**With Windows (Git Bash):** make the private key and CSR, upload the CSR,
+then combine the downloaded certificate, Apple's intermediate certificate and
+the key into a `.p12`:
+
+```bash
+mkdir -p ~/pdf-studio-signing && cd ~/pdf-studio-signing
+MSYS_NO_PATHCONV=1 openssl req -new -newkey rsa:2048 -nodes -keyout developer_id.key \
+  -out developer_id.csr -subj "/emailAddress=you@example.com/CN=Your Name/C=US"
+# upload developer_id.csr, download developerID_application.cer into this folder, then:
+openssl x509 -inform DER -in developerID_application.cer -out developer_id.pem
+curl -sO https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+openssl x509 -inform DER -in DeveloperIDG2CA.cer -out developer_id_ca.pem
+openssl pkcs12 -export -inkey developer_id.key -in developer_id.pem \
+  -certfile developer_id_ca.pem -out developer_id.p12    # with OpenSSL 3, add -legacy
+```
+
+Keep `developer_id.key` and the `.p12` somewhere safe, such as a password
+manager. Anyone with them can sign software in your name.
+
+### 2. Notarization key
+
+In [App Store Connect](https://appstoreconnect.apple.com) → *Users and Access*
+→ *Integrations* → *App Store Connect API* → *Team Keys* → **+**, with access
+*Developer*. Download the `.p8` file (Apple offers it only once), and note the
+*Key ID* and the *Issuer ID* shown above the list.
+
+### 3. GitHub secrets
+
+In **Settings → Secrets and variables → Actions → Secrets**:
+
+| Secret | Value |
+|---|---|
+| `MACOS_CERTIFICATE_P12` | The `.p12` as base64. PowerShell: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("developer_id.p12")) \| Set-Clipboard`; Mac: `base64 -i developer_id.p12 \| pbcopy` |
+| `MACOS_CERTIFICATE_PASSWORD` | The `.p12` password |
+| `MACOS_NOTARY_KEY` | The whole text of the `.p8` file |
+| `MACOS_NOTARY_KEY_ID` | The Key ID |
+| `MACOS_NOTARY_ISSUER_ID` | The Issuer ID |
+
+The next release is then signed with hardened runtime, self-tested while
+signed, notarized, and stapled, which lets Gatekeeper check it offline. The
+release notes drop the *Open Anyway* step automatically. If Apple rejects a
+build, the job prints Apple's list of problems.
+
+**On a Mac, locally:** store the key once with `xcrun notarytool
+store-credentials pdf-studio --key AuthKey_XXXX.p8 --key-id … --issuer …`,
+then run `PDF_STUDIO_SIGN_IDENTITY="Developer ID Application: …"
+PDF_STUDIO_NOTARY_PROFILE=pdf-studio scripts/build_pdf_studio_macos.sh --smoke --notarize`.
+
+### Intel Macs
 
 GitHub's Intel macOS runners (`macos-15-intel`) are supported until fall 2027.
 After that, drop the `x86_64` build from the matrix.
