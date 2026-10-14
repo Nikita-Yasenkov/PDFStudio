@@ -13,7 +13,7 @@ from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QGuiApplication, QPalette
 from PyQt6.QtWidgets import QApplication
 
-from .icons import icons
+from .icons import icon_file, icons
 
 LIGHT = "light"
 DARK = "dark"
@@ -134,6 +134,7 @@ def _palette(t: Theme) -> QPalette:
 
 
 def stylesheet(t: Theme) -> str:
+    check = icon_file("check", t.accent_text, 12, stroke_width=3.2)
     return f"""
 * {{ outline: 0; }}
 QMainWindow, QDialog {{ background: {t.window}; }}
@@ -150,6 +151,7 @@ QFrame#VSeparator {{ background: {t.border}; max-width: 1px; min-width: 1px; bor
 QLabel {{ color: {t.text}; background: transparent; }}
 QLabel[role="muted"] {{ color: {t.text_muted}; }}
 QLabel[role="faint"] {{ color: {t.text_faint}; }}
+QLabel[role="empty-title"] {{ color: {t.text}; font-weight: 600; }}
 QLabel[role="heading"] {{ font-size: 15px; font-weight: 600; }}
 QLabel[role="title"] {{ font-size: 22px; font-weight: 600; }}
 QLabel[role="section"] {{ color: {t.text_muted}; font-size: 11px; font-weight: 600; }}
@@ -247,6 +249,13 @@ QPushButton[variant="flat"] {{ background: transparent; border: none; text-align
 QPushButton[variant="flat"]:hover {{ background: {t.surface_alt}; }}
 
 QCheckBox, QRadioButton {{ color: {t.text}; spacing: 8px; }}
+QCheckBox::indicator {{ width: 14px; height: 14px; border: 1px solid {t.border_strong};
+    border-radius: 4px; background: {t.surface}; }}
+QCheckBox::indicator:hover {{ border-color: {t.accent}; }}
+QCheckBox::indicator:checked {{ background: {t.accent}; border-color: {t.accent};
+    image: url({check}); }}
+QCheckBox::indicator:disabled {{ background: {t.surface_alt}; border-color: {t.border}; }}
+QCheckBox::indicator:checked:disabled {{ background: {t.border_strong}; border-color: {t.border_strong}; }}
 QGroupBox {{ color: {t.text}; border: 1px solid {t.border}; border-radius: 8px; margin-top: 14px;
     padding: 10px 8px 8px 8px; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; color: {t.text_muted}; }}

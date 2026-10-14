@@ -128,3 +128,66 @@ def test_selecting_a_result_row_jumps(window, sample_pdf):
     panel.list.setCurrentIndex(panel.model.index(1))
     assert v.search.current == 0
     assert v.current_page == 3
+
+
+# ------------------------------------------------------------ panel states
+def _search_in_panel(window, query):
+    panel = window.search_panel
+    panel.field.setText(query)
+    panel._run_now(jump=False)
+    deadline = time.time() + 10
+    while window.view.search.searching and time.time() < deadline:
+        pump(20)
+    pump(20)
+    return panel
+
+
+def test_no_results_keeps_the_panel_compact(window, sample_pdf):
+    # the empty state takes the spare height, not the gaps between the rows
+    window.open_path(sample_pdf)
+    window.find()
+    window.resize(1000, 1100)
+    panel = _search_in_panel(window, "zzz-not-there")
+    pump(50)
+    assert panel.body.currentWidget() is panel.empty
+    assert not panel.status_row.isVisible()
+    assert "No matches" in panel.empty_title.text()
+    assert "spelling" in panel.empty_detail.text()
+    field_y = panel.field.mapTo(panel, panel.field.rect().topLeft()).y()
+    title_y = panel.empty_title.mapTo(panel, panel.empty_title.rect().topLeft()).y()
+    assert panel.height() > 800, panel.height()
+    assert field_y < 70 and title_y < 220, (field_y, title_y)
+
+
+def test_no_results_suggests_turning_options_off(window, sample_pdf):
+    window.open_path(sample_pdf)
+    window.find()
+    panel = window.search_panel
+    panel.case_box.setChecked(True)
+    panel = _search_in_panel(window, "page-marker-1")
+    assert panel.empty_detail.text() == "Try turning off Match case."
+
+
+def test_scanned_document_says_there_is_no_text(window, tmp_path):
+    import pymupdf as fitz
+    path = str(tmp_path / "scan.pdf")
+    doc = fitz.open()
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 60, 80), 0)
+    pix.clear_with(200)
+    doc.new_page().insert_image(fitz.Rect(0, 0, 595, 842), pixmap=pix)
+    doc.save(path)
+    doc.close()
+    window.open_path(path)
+    window.find()
+    panel = _search_in_panel(window, "758")
+    assert window.view.search.no_text
+    assert panel.empty_title.text() == "No searchable text"
+
+
+def test_results_show_the_list_and_count(window, sample_pdf):
+    window.open_path(sample_pdf)
+    window.find()
+    panel = _search_in_panel(window, "PAGE-MARKER-3")
+    assert panel.body.currentWidget() is panel.list
+    assert panel.status_row.isVisible() and "1 result" in panel.status.text()
+    assert not window.view.search.no_text

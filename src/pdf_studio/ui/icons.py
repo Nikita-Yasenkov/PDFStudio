@@ -7,10 +7,12 @@ Shapes follow the Lucide visual language (ISC licensed).
 
 from __future__ import annotations
 
+import os
+import tempfile
 from typing import Dict, Optional, Tuple
 
 from PyQt6.QtCore import QByteArray, QRectF, QSize, Qt
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 
 _SVG_HEAD = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
@@ -186,6 +188,29 @@ def app_logo_pixmap(size: int, dpr: float = 2.0) -> QPixmap:
     p.end()
     pm.setDevicePixelRatio(dpr)
     return pm
+
+
+def icon_file(name: str, color: str, size: int, stroke_width: float = 1.8) -> str:
+    """PNG of an icon on disk, for stylesheet ``image: url(...)`` properties.
+
+    Written once per name/color/size (with an ``@2x`` copy that Qt picks on
+    high-DPI screens) to a temp folder; returns a forward-slash path.
+    """
+    folder = os.path.join(tempfile.gettempdir(), "pdf-studio-icons")
+    base = os.path.join(folder, f"{name}-{color.lstrip('#').lower()}-{size}")
+    path = base + ".png"
+    if not (os.path.exists(path) and os.path.exists(base + "@2x.png")):
+        os.makedirs(folder, exist_ok=True)
+        svg = QByteArray(IconFactory.svg(name, QColor(color), stroke_width))
+        for scale, target in ((1, path), (2, base + "@2x.png")):
+            img = QImage(size * scale, size * scale, QImage.Format.Format_ARGB32_Premultiplied)
+            img.fill(Qt.GlobalColor.transparent)
+            p = QPainter(img)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            QSvgRenderer(svg).render(p, QRectF(0, 0, img.width(), img.height()))
+            p.end()
+            img.save(target)
+    return path.replace("\\", "/")
 
 
 #: Shared factory; ``theme.apply_theme`` recolours it.

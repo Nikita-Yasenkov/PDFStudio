@@ -9,8 +9,8 @@ from PyQt6.QtCore import (QAbstractListModel, QEvent, QModelIndex, QObject, QRec
                           QSize, Qt, QThread, QTimer, pyqtSignal)
 from PyQt6.QtGui import QAction, QColor, QFont, QFontMetrics, QPainter, QPen
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout, QLabel,
-                             QLineEdit, QListView, QProgressBar, QStyle,
-                             QStyledItemDelegate, QToolButton, QVBoxLayout,
+                             QLineEdit, QListView, QProgressBar, QStackedWidget,
+                             QStyle, QStyledItemDelegate, QToolButton, QVBoxLayout,
                              QWidget)
 
 from ..core.search import SearchOptions, SearchRun
@@ -59,6 +59,7 @@ class SearchController(QObject):
         self.searching = False
         self.pages_done = 0
         self.truncated = False
+        self.no_text = False  # finished without hits in a document with no text layer
         self._gen = 0
         self._threads: List[_SearchThread] = []
         self._run: Optional[SearchRun] = None
@@ -81,6 +82,7 @@ class SearchController(QObject):
         self.current = -1
         self.pages_done = 0
         self.truncated = False
+        self.no_text = False
         self._want_jump = jump
         self._start_page = self.view.current_page
         if options.is_empty:
@@ -180,9 +182,22 @@ class SearchController(QObject):
         if self._run is not None:
             self.truncated = self._run.truncated
         self._run = None
+        if completed and not self.hits:
+            self.no_text = not self._document_has_text()
         if self._want_jump and self.current < 0 and self.hits:
             self.set_current(0)  # wrap around
         self.stateChanged.emit()
+
+    def _document_has_text(self, sample: int = 12) -> bool:
+        """Whether any of up to ``sample`` evenly spread pages has text."""
+        session = self.view.session
+        n = session.page_count
+        pages = range(n) if n <= sample else sorted(
+            {round(i * (n - 1) / (sample - 1)) for i in range(sample)})
+        try:
+            return any(session.words(i) for i in pages)
+        except Exception:  # noqa: BLE001 - unknown: don't claim the text is missing
+            return True
 
     def _on_session_event(self, e: SessionEvent) -> None:
         if e.kind in (EventKind.STRUCTURE, EventKind.PAGES) and not self.options.is_empty:
@@ -367,8 +382,8 @@ class SearchPanel(QWidget):
 
         box = QWidget(self)
         bl = QVBoxLayout(box)
-        bl.setContentsMargins(12, 0, 12, 6)
-        bl.setSpacing(6)
+        bl.setContentsMargins(12, 2, 12, 6)
+        bl.setSpacing(8)
         self.field = QLineEdit(box)
         self.field.setObjectName("SearchField")
         self.field.setPlaceholderText("Find in document")
@@ -390,7 +405,10 @@ class SearchPanel(QWidget):
         opts.addStretch(1)
         bl.addLayout(opts)
 
-        status = QHBoxLayout()
+        # result count + previous/next; shown only while there is something to count
+        self.status_row = QWidget(box)
+        status = QHBoxLayout(self.status_row)
+        status.setContentsMargins(0, 0, 0, 0)
         status.setSpacing(2)
         self.status = QLabel("", box)
         self.status.setProperty("role", "muted")
@@ -409,7 +427,7 @@ class SearchPanel(QWidget):
         self.next_btn.clicked.connect(self.next)
         status.addWidget(self.prev_btn)
         status.addWidget(self.next_btn)
-        bl.addLayout(status)
+        bl.addWidget(self.status_row)
         lay.addWidget(box)
 
         self.progress = QProgressBar(self)
@@ -418,7 +436,10 @@ class SearchPanel(QWidget):
         self.progress.hide()
         lay.addWidget(self.progress)
 
-        self.list = QListView(self)
+        # results and the empty state share one stretching slot, so the rows
+        # above keep their size whichever is shown
+        self.body = QStackedWidget(self)
+        self.list = QListView(self.body)
         self.list.setMouseTracking(True)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -428,14 +449,28 @@ class SearchPanel(QWidget):
         self.list.setItemDelegate(SearchResultDelegate(self.list))
         self.list.selectionModel().currentChanged.connect(self._on_row_selected)
         self.list.clicked.connect(lambda idx: self._on_row_selected(idx, None))
-        lay.addWidget(self.list, 1)
+        self.body.addWidget(self.list)
 
-        self.empty_hint = QLabel("Type to search the document.\nResults appear as pages are scanned.", self)
-        self.empty_hint.setProperty("role", "faint")
-        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        self.empty_hint.setWordWrap(True)
-        self.empty_hint.setContentsMargins(16, 24, 16, 0)
-        lay.addWidget(self.empty_hint)
+        self.empty = QWidget(self.body)
+        el = QVBoxLayout(self.empty)
+        el.setContentsMargins(20, 36, 20, 16)
+        el.setSpacing(6)
+        self.empty_icon = QLabel(self.empty)
+        self.empty_icon.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        el.addWidget(self.empty_icon)
+        el.addSpacing(4)
+        self.empty_title = QLabel(self.empty)
+        self.empty_title.setProperty("role", "empty-title")
+        self.empty_detail = QLabel(self.empty)
+        self.empty_detail.setProperty("role", "faint")
+        for lbl in (self.empty_title, self.empty_detail):
+            lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            lbl.setWordWrap(True)
+            el.addWidget(lbl)
+        el.addStretch(1)
+        self.body.addWidget(self.empty)
+        lay.addWidget(self.body, 1)
+        self._refresh_empty_icon()
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -598,15 +633,35 @@ class SearchPanel(QWidget):
         self.status.setText(text)
         self.prev_btn.setEnabled(n > 0)
         self.next_btn.setEnabled(n > 0)
-        self.list.setVisible(n > 0)
-        self.empty_hint.setVisible(n == 0)
-        if has_query and n == 0 and c is not None and not c.searching:
-            self.empty_hint.setText(f"No matches for “{c.options.query}”.")
+        self.status_row.setVisible(has_query and (n > 0 or bool(c and c.searching)))
+        if n > 0 or (c is not None and c.searching):
+            self.body.setCurrentWidget(self.list)
+            return
+        self.body.setCurrentWidget(self.empty)
+        if not has_query:
+            title = "Search this document"
+            detail = "Find words and numbers on every page. Press Enter or F3 for the next match."
+        elif c.no_text:
+            title = "No searchable text"
+            detail = ("This document seems to be scanned images, so there is no text "
+                      "to search.")
         else:
-            self.empty_hint.setText("Type to search the document.\nResults appear as pages are scanned.")
+            title = f"No matches for “{c.options.query}”"
+            on = [name for name, box in (("Match case", self.case_box),
+                                         ("Whole words", self.words_box)) if box.isChecked()]
+            if on:
+                detail = f"Try turning off {' and '.join(on)}."
+            else:
+                detail = "Check the spelling, or search for part of the word or number."
+        self.empty_title.setText(title)
+        self.empty_detail.setText(detail)
+
+    def _refresh_empty_icon(self) -> None:
+        self.empty_icon.setPixmap(icons.pixmap("search", 28, QColor(theme.current().text_faint)))
 
     def refresh_icons(self) -> None:
         self.header.refresh_icons()
         self._icon_action.setIcon(icons.icon("search"))
+        self._refresh_empty_icon()
         self.prev_btn.setIcon(icons.icon("chevron-up"))
         self.next_btn.setIcon(icons.icon("chevron-down"))
