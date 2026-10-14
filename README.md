@@ -10,8 +10,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Nikita-Yasenkov/PDFStudio/releases/latest/download/PDFStudio-win64.zip"><b>⬇ Download for Windows</b></a>
-  &nbsp;·&nbsp; <a href="#quick-setup">Quick setup</a>
+  <a href="https://github.com/Nikita-Yasenkov/PDFStudio/releases/latest/download/PDFStudio-win64.zip"><b>⬇ Windows</b></a>
+  &nbsp;·&nbsp; <a href="https://github.com/Nikita-Yasenkov/PDFStudio/releases/latest/download/PDFStudio-macos-arm64.dmg"><b>⬇ macOS (Apple silicon)</b></a>
+  &nbsp;·&nbsp; <a href="https://github.com/Nikita-Yasenkov/PDFStudio/releases/latest/download/PDFStudio-macos-x86_64.dmg"><b>⬇ macOS (Intel)</b></a>
+  <br><a href="#quick-setup">Quick setup</a>
   &nbsp;·&nbsp; <a href="#features">Features</a>
   &nbsp;·&nbsp; <a href="#pdf-studio-vs-acrobat">vs. Acrobat</a>
   &nbsp;·&nbsp; <a href="#build-from-source">Build from source</a>
@@ -23,25 +25,43 @@
 
 - **Free, with no account.** There is no subscription, no sign-in and no trial.
 - **Private.** It never connects to the internet: no telemetry and no cloud
-  uploads. Your documents and saved signatures stay on your PC.
+  uploads. Your documents and saved signatures stay on your computer.
 - **Fast on big files.** Pages render in tiles that are cached, so scrolling
   and zooming stay smooth with hundreds of pages.
 - **Forgiving.** Almost every action can be undone, even after you save:
   annotations, page moves, text edits and redactions.
-- **Small.** The download is 46 MB, it runs without installing, and the
+- **Windows and Mac.** On Windows it runs without installing, and the
   optional install needs no administrator rights.
 
 ## Quick setup
+
+### Windows
 
 1. **Download** [`PDFStudio-win64.zip`](https://github.com/Nikita-Yasenkov/PDFStudio/releases/latest/download/PDFStudio-win64.zip).
    It needs Windows 10 or 11, 64-bit.
 2. **Unzip** it anywhere.
 3. **Run** `PDFStudio\PDFStudio.exe`. It works straight from the folder.
 
-> **Windows shows "Windows protected your PC"?** The app isn't code-signed yet,
-> so SmartScreen warns the first time you run it. Click **More info → Run anyway**.
+> **Windows shows "Windows protected your PC"?** SmartScreen warns about apps
+> it hasn't seen often yet. Click **More info → Run anyway**.
 
-### Install it and open PDFs with it
+### macOS
+
+1. **Download** the disk image for your Mac:
+   [Apple silicon](https://github.com/Nikita-Yasenkov/PDFStudio/releases/latest/download/PDFStudio-macos-arm64.dmg)
+   (M1 and newer) or
+   [Intel](https://github.com/Nikita-Yasenkov/PDFStudio/releases/latest/download/PDFStudio-macos-x86_64.dmg).
+   It needs macOS 13 Ventura or later.
+2. **Open** it and drag **PDF Studio** onto **Applications**.
+3. **Open PDF Studio** from Applications. The app isn't notarized by Apple yet,
+   so the first time macOS says it can't verify it. Open **System Settings →
+   Privacy & Security**, scroll down and click **Open Anyway**. You only do this
+   once.
+
+**To make it your default PDF app,** select any PDF in Finder, press **⌘I**
+(Get Info), choose PDF Studio under **Open with**, and click **Change All…**.
+
+### Install it on Windows and open PDFs with it
 
 In the app, open **Help → PDF Studio on This Computer…** and click
 **Install for this user**. This:
@@ -135,15 +155,15 @@ and dark themes are included, and it opens password-protected PDFs.
 - certificate-based digital signatures and e-signature workflows,
 - printing,
 - exporting to Word or Excel,
-- macOS or mobile apps. It runs from source on other systems, but only the
-  Windows build is tested.
+- mobile apps.
 
 If your day is mostly reading, marking up, signing and reshuffling PDFs, PDF
 Studio covers it.
 
 ## Keyboard shortcuts
 
-**Help → Keyboard Shortcuts** (**F1**) lists all of them. The most used:
+**Help → Keyboard Shortcuts** (**F1**) lists all of them. On a Mac, use **⌘**
+where the table says Ctrl. The most used:
 
 | Action | Keys | Action | Keys |
 |---|---|---|---|
@@ -169,29 +189,33 @@ uv pip install -e ".[dev]"
 
 pdf-studio                          # run the app (pdf-studiow: no console window)
 pdf-studio file.pdf other.pdf       # open files in tabs
-python -m pytest -q                 # 308 tests, headless, about 50 s
+python -m pytest -q                 # headless test suite, about a minute
 ```
+
+On macOS or Linux, activate with `source .venv/bin/activate` instead.
 
 The only runtime dependencies are **PyQt6** and **PyMuPDF**. Test documents
 are generated on demand by `python -m pdf_studio.tests.fixtures.make_fixtures`;
 `encrypted.pdf` opens with the password `secret`.
 
-**Release build.** This command builds the one-folder app with PyInstaller in a
-clean uv environment, runs a headless self-test of the bundle, and writes
-`dist\PDFStudio-win64.zip`:
+**Release builds.** These scripts build the app with PyInstaller in a clean uv
+environment and run a headless self-test of the result:
 
 ```powershell
-.\scripts\build_pdf_studio.ps1 -Smoke -Zip      # add -Install to install it for your user
+.\scripts\build_pdf_studio.ps1 -Smoke -Zip      # Windows: dist\PDFStudio-win64.zip (-Install installs it)
 ```
 
-**Releasing.** Every push and pull request runs
-[`.github/workflows/build.yml`](.github/workflows/build.yml) on Windows. It
-runs the tests, builds the app, runs its self-test, and attaches the zip to the
-run. To publish a new version, change `__version__` in
-`src/pdf_studio/__init__.py` and add a matching `## <version>` section to
-[`CHANGELOG.md`](CHANGELOG.md) in the same push to `main`. The workflow then
-creates release `v<version>` with the zip and those notes, and the download
-link above serves it. Pushes that keep the version only build.
+```bash
+scripts/build_pdf_studio_macos.sh --smoke       # macOS: dist/PDFStudio-macos-<arch>.dmg
+```
+
+**Releasing.** GitHub Actions tests and builds every push and pull request on
+Windows and macOS. To publish a version, change `__version__` in
+`src/pdf_studio/__init__.py`, add a matching section to
+[`CHANGELOG.md`](CHANGELOG.md) and push to `main`. The workflow signs the
+Windows app and publishes the release with all downloads.
+[`docs/RELEASING.md`](docs/RELEASING.md) covers the details, including the
+one-time code-signing setup.
 
 **Screenshots.** Run `python scripts\make_screenshots.py` to regenerate the
 images in this README from the real app, using a fictional demo contract.
@@ -204,7 +228,7 @@ src/pdf_studio/
   core/         Qt-free logic: document session, undo commands, layout, caches, search
   ui/           PyQt6 app: main window, canvas, tools, panels, dialogs, themes
   integration/  Windows install, shortcuts and .pdf registration
-  packaging/    PyInstaller build
+  packaging/    PyInstaller builds for Windows and macOS
   tests/        pytest suite and fixture generator
 ```
 

@@ -12,4 +12,4 @@ Layers (imports only flow downwards):
 APP_NAME = "PDF Studio"
 APP_ID = "PDFStudio"
 ORG_NAME = "codekg"
-__version__ = "0.1.1"
+__version__ = "0.1.2"

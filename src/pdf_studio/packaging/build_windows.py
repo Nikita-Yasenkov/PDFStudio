@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from typing import List
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -94,25 +95,18 @@ def make_icon(path: str) -> str:
     return path
 
 
-def build(dist: str, work: str, clean: bool = True) -> str:
-    try:
-        import PyInstaller.__main__ as pyi
-    except ImportError:
-        sys.exit("PyInstaller is not installed: pip install pyinstaller")
+def pyinstaller_args(name: str, dist: str, work: str, clean: bool = True) -> List[str]:
+    """PyInstaller arguments shared by the Windows and macOS builds."""
     os.makedirs(work, exist_ok=True)
-    icon = make_icon(os.path.join(work, "pdf_studio.ico"))
-    version_file = make_version_file(os.path.join(work, "version_info.txt"))
     entry = os.path.join(work, "pdf_studio_entry.py")
     with open(entry, "w", encoding="utf-8") as f:
         f.write("import sys\nfrom pdf_studio.ui.app import main\nsys.exit(main())\n")
     args = [
         entry,
-        "--name", NAME,
+        "--name", name,
         "--windowed",
         "--onedir",
         "--noconfirm",
-        "--icon", icon,
-        "--version-file", version_file,
         "--noupx",  # packed executables are a classic antivirus false-positive trigger
         "--paths", SRC,
         "--distpath", dist,
@@ -128,6 +122,17 @@ def build(dist: str, work: str, clean: bool = True) -> str:
         args += ["--exclude-module", mod]
     if clean:
         args.append("--clean")
+    return args
+
+
+def build(dist: str, work: str, clean: bool = True) -> str:
+    try:
+        import PyInstaller.__main__ as pyi
+    except ImportError:
+        sys.exit("PyInstaller is not installed: pip install pyinstaller")
+    args = pyinstaller_args(NAME, dist, work, clean)
+    args += ["--icon", make_icon(os.path.join(work, "pdf_studio.ico")),
+             "--version-file", make_version_file(os.path.join(work, "version_info.txt"))]
     pyi.run(args)
     exe = os.path.join(dist, NAME, f"{NAME}.exe")
     if not os.path.exists(exe):
@@ -182,7 +187,8 @@ def smoke(exe: str, pdf: str) -> int:
         code = proc.returncode
     except subprocess.TimeoutExpired:
         # a frozen app that fails at start-up shows a blocking error box
-        subprocess.run(["taskkill", "/F", "/IM", os.path.basename(exe)], capture_output=True)
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/IM", os.path.basename(exe)], capture_output=True)
         code = 124
     if os.path.exists(log):
         with open(log, encoding="utf-8") as f:

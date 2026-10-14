@@ -4,13 +4,49 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QFont, QGuiApplication
 from PyQt6.QtWidgets import QApplication
 
 from .. import APP_ID, APP_NAME, ORG_NAME, __version__
+
+
+class FileOpenQueue:
+    """macOS "open this file" requests (Finder double-click, Open With, a drop
+    on the Dock icon) arrive as QFileOpenEvent, possibly before the main
+    window exists. Paths wait here until a receiver is attached."""
+
+    def __init__(self) -> None:
+        self.pending: List[str] = []
+        self._receiver: Optional[Callable[[List[str]], None]] = None
+
+    def attach(self, receiver: Callable[[List[str]], None]) -> None:
+        self._receiver = receiver
+        pending, self.pending = self.pending, []
+        if pending:
+            receiver(pending)
+
+    def handle(self, event: QEvent) -> bool:
+        if event.type() != QEvent.Type.FileOpen:
+            return False
+        path = event.file()  # a QFileOpenEvent
+        if path:
+            if self._receiver is None:
+                self.pending.append(path)
+            else:
+                self._receiver([path])
+        return True
+
+
+class Application(QApplication):
+    def __init__(self, argv: List[str]):
+        super().__init__(argv)
+        self.file_opens = FileOpenQueue()
+
+    def event(self, e: QEvent) -> bool:  # noqa: N802 - Qt override
+        return self.file_opens.handle(e) or super().event(e)
 
 
 def create_application(argv: Optional[Sequence[str]] = None) -> QApplication:
@@ -19,7 +55,7 @@ def create_application(argv: Optional[Sequence[str]] = None) -> QApplication:
         return app  # type: ignore[return-value]
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    app = QApplication(list(argv) if argv is not None else sys.argv)
+    app = Application(list(argv) if argv is not None else sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
     app.setOrganizationName(ORG_NAME)
@@ -219,4 +255,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     window.show()
     for path in files:
         window.open_path(path)
+    if isinstance(app, Application):
+        app.file_opens.attach(window.receive_files)
     return app.exec()

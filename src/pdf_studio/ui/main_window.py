@@ -397,8 +397,9 @@ class MainWindow(QMainWindow):
         m = mb.addMenu("&Help")
         m.addAction(self.actions["shortcuts"])
         m.addSeparator()
-        m.addAction(self.actions["integration"])
-        m.addSeparator()
+        if sys.platform == "win32":  # per-user install and .pdf registration
+            m.addAction(self.actions["integration"])
+            m.addSeparator()
         m.addAction(self.actions["about"])
         self.help_menu = m
 
@@ -708,6 +709,8 @@ class MainWindow(QMainWindow):
             return
         if sys.platform == "win32":
             subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        elif sys.platform == "darwin":  # pragma: no cover
+            subprocess.Popen(["open", "-R", path])  # select it in Finder
         else:  # pragma: no cover
             from PyQt6.QtCore import QUrl
             from PyQt6.QtGui import QDesktopServices

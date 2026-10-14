@@ -73,7 +73,7 @@ the development setup).
 | 41 | Signature ink-capture dialog | done | draw pad: smoothing, ink colors/widths, undo, save for reuse |
 | 42 | Milestone 5 tests | done | `tests/test_milestone5.py` |
 
-**Totals:** 42/42 tickets · 308 automated tests (`python -m pytest -q`, ~50 s).
+**Totals:** 42/42 tickets · 316 automated tests (`python -m pytest -q`, ~50 s).
 
 ## Beyond the tickets — Windows desktop install
 
