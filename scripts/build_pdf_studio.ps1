@@ -43,6 +43,7 @@ $env:PYTHONPATH = Join-Path $Root "src"
 Assert-Ok "Build"
 
 $exe = Join-Path $Root "dist\PDFStudio\PDFStudio.exe"
+Copy-Item (Join-Path $Root "LICENSE") (Join-Path $Root "dist\PDFStudio\LICENSE.txt")
 Write-Host ""
 Write-Host "Built: $exe"
 if ($Zip) {

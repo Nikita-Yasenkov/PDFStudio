@@ -210,3 +210,7 @@ PyMuPDF; a test enforces both rules. For the design, see
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) (GPL v3), the Qt 6 user interface
 - [PyMuPDF](https://pymupdf.readthedocs.io/) (AGPL v3), PDF rendering and editing on MuPDF
 - [PyInstaller](https://pyinstaller.org/), the Windows bundle
+
+## License
+
+PDF Studio is free software under the [GNU Affero General Public License v3.0](LICENSE).
