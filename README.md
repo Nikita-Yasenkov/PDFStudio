@@ -10,7 +10,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Nikita-Yasenkov/PDFStudio/releases/latest/download/PDFStudio-win64.zip"><b>⬇ Download for Windows</b></a>
   &nbsp;·&nbsp; <a href="#quick-setup">Quick setup</a>
   &nbsp;·&nbsp; <a href="#features">Features</a>
   &nbsp;·&nbsp; <a href="#pdf-studio-vs-acrobat">vs. Acrobat</a>
