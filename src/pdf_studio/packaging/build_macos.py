@@ -73,7 +73,11 @@ def make_icns(work: str) -> str:
             renderer.render(p, QRectF(margin, margin, px - 2 * margin, px - 2 * margin))
             p.end()
             img.save(os.path.join(iconset, f"icon_{size}x{size}{'@2x' if scale == 2 else ''}.png"))
-    icns = os.path.join(work, "PDFStudio.icns")
+    # Absolute: PyInstaller resolves a relative --icon against --specpath, and
+    # that directory is `work`. A relative path would be prefixed twice
+    # (build/pyinstaller/build/pyinstaller/PDFStudio.icns) and the bundle step
+    # would fail with FileNotFoundError.
+    icns = os.path.abspath(os.path.join(work, "PDFStudio.icns"))
     subprocess.run(["iconutil", "-c", "icns", iconset, "-o", icns], check=True)
     return icns
 
