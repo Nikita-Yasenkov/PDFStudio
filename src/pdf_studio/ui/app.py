@@ -105,9 +105,14 @@ def smoke(paths: Sequence[str], log: Optional[str] = None) -> int:
     from ..pdf import PdfDocument, PdfError, library_versions
     from .main_window import MainWindow
     from .settings import AppSettings
+    from .updates import https_status
     import tempfile
 
     lines.append(f"PDF Studio {__version__} · PyMuPDF {library_versions()['PyMuPDF']}")
+    https_ok, https_detail = https_status()  # Help → Check for Updates needs it
+    lines.append(f"{'OK' if https_ok else 'FAIL'} HTTPS: {https_detail}")
+    if not https_ok:
+        code = 1
     settings = AppSettings.from_file(os.path.join(tempfile.mkdtemp(), "smoke.ini"))
     window = MainWindow(settings=settings)
     window.resize(1000, 700)
@@ -213,8 +218,113 @@ def run_install_command(argv: List[str]) -> int:
     return 0
 
 
+def run_apply_update(argv: List[str]) -> int:
+    """``--apply-update FOLDER --wait PID [FILE…]``: run by a new version from
+    the folder it was unpacked to, to replace the app in FOLDER once process
+    PID has exited, then start it with the files (integration/updater.py)."""
+    import tempfile
+    import threading
+    import traceback
+    from ..integration import updater
+
+    log_path = os.path.join(tempfile.gettempdir(), "pdf-studio-update.log")
+
+    def log(text: str) -> None:
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(text.rstrip() + "\n")
+        except OSError:
+            pass
+
+    log(f"--- {__version__}: {' '.join(argv[1:])}")
+    try:
+        app_dir, pid, files = updater.parse_command(argv)
+        if not getattr(sys, "frozen", False):
+            raise ValueError("only the packaged app can install updates")
+    except ValueError as exc:
+        log(str(exc))
+        create_application(argv)
+        _message(f"{APP_NAME} update", f"The update couldn't start: {exc}", error=True)
+        return 2
+    app = create_application(argv)
+    from .icons import app_icon
+    from .settings import AppSettings
+    from .theme import ThemeManager
+    app.setWindowIcon(app_icon())
+    ThemeManager(app, AppSettings().theme).apply()
+    source = os.path.dirname(os.path.abspath(sys.executable))
+    os.chdir(source)  # working inside app_dir would stop it being renamed
+    window = _busy_window(f"Updating {APP_NAME} to {__version__}…")
+    outcome = {}
+
+    def work() -> None:
+        try:
+            outcome["exe"] = updater.apply_update(source, app_dir, pid)
+        except Exception as exc:  # noqa: BLE001 - reported to the user below
+            outcome["error"] = exc
+            log(traceback.format_exc())
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    while worker.is_alive():
+        app.processEvents()
+        worker.join(0.03)
+    window.close()
+    if "error" in outcome:
+        _message(f"{APP_NAME} update", f"The update couldn't be installed:\n{outcome['error']}"
+                 f"\n\n{APP_NAME} wasn't changed. Details: {log_path}", error=True)
+        old = os.path.join(app_dir, updater.EXE_NAME)
+        if os.path.isfile(old):
+            updater.launch(old, files)
+        return 1
+    if sys.platform == "win32":
+        from ..integration import windows as win
+        try:
+            win.refresh_registration(app_dir)
+        except OSError as exc:
+            log(f"registration not refreshed: {exc}")
+    log(f"updated {app_dir}")
+    updater.launch(outcome["exe"], files)
+    return 0
+
+
+def _busy_window(text: str):
+    from PyQt6.QtWidgets import QProgressBar, QVBoxLayout, QWidget
+    from .qtutil import label
+    w = QWidget()
+    w.setWindowTitle(APP_NAME)
+    w.setFixedWidth(380)
+    lay = QVBoxLayout(w)
+    lay.setContentsMargins(22, 20, 22, 22)
+    lay.setSpacing(12)
+    lay.addWidget(label(text, "heading"))
+    bar = QProgressBar(w)
+    bar.setRange(0, 0)
+    bar.setTextVisible(False)
+    lay.addWidget(bar)
+    w.show()
+    return w
+
+
+def _remove_update_leftovers() -> None:
+    """In the background, after start-up: the unpacked download and the
+    previous version's folder (integration/updater.py)."""
+    import threading
+    import time
+    from ..integration import updater
+    app_dir = os.path.dirname(os.path.abspath(sys.executable))
+
+    def run() -> None:
+        time.sleep(5)  # the updater that started us may still be exiting
+        updater.remove_leftovers(app_dir)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv if argv is None else argv)
+    if "--apply-update" in argv:  # a new version replacing this one
+        return run_apply_update(argv)
     if any(a in argv for a in ("--install", "--uninstall", "--register")):
         return run_install_command(argv)
     if "--smoke" in argv:
@@ -257,4 +367,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         window.open_path(path)
     if isinstance(app, Application):
         app.file_opens.attach(window.receive_files)
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        _remove_update_leftovers()
     return app.exec()

@@ -9,6 +9,10 @@ Each version's section below becomes the notes of its GitHub release.
   it in PDF Studio once you choose it as the default PDF app.
 - **Windows:** `PDFStudio.exe` shows its name and version in its file
   properties, and releases can be code-signed.
+- **Check for Updates:** **Help → Check for Updates…** shows what's new in the
+  latest version. On Windows, **Update** installs it and reopens your
+  documents; on a Mac, it downloads the disk image. This is the only time
+  PDF Studio connects to the internet, and only when you choose it.
 
 ## 0.1.1
 

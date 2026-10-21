@@ -33,6 +33,27 @@ no release, so the next run publishes it.
 The README's download links point at `releases/latest/download/…`, so they
 always serve the newest release without changes.
 
+**Help → Check for Updates** in the app reads the same latest release from
+GitHub's API. It compares the tag with the running version, shows the
+CHANGELOG section as "What's new" (the notes before *Get started*), and
+downloads the file for the user's computer, checked against the SHA-256 GitHub
+reports. Keep the `v<version>` tags and the download names:
+`tests/test_updates.py` fails if this workflow's file names change.
+
+On Windows, the app then installs the update itself
+([`integration/updater.py`](../src/pdf_studio/integration/updater.py)): it
+unpacks the zip and starts the new `PDFStudio.exe --apply-update FOLDER --wait
+PID [FILE…]`, which replaces the old app folder and reopens the documents.
+Two rules follow:
+
+- **Every version keeps accepting those arguments.** The version before it is
+  the one that starts it.
+- **Once releases are signed, keep the same publisher name.** A signed copy
+  only installs updates whose signature has the same subject. Azure renews
+  the certificate every few days under the same name, which is fine; changing
+  the validated identity (say, from you to a company) means users update the
+  first time by hand.
+
 ## Windows code signing (Azure Artifact Signing)
 
 A signature tells Windows who published the app. It keeps Microsoft Defender's

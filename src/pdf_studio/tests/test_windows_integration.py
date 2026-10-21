@@ -64,6 +64,33 @@ def test_install_requires_the_exe(tmp_path, reg):
         win.install(str(tmp_path), str(tmp_path / "t"), shortcuts=False, reg=reg)
 
 
+def test_refresh_registration_after_an_update(reg, tmp_path):
+    from pdf_studio import __version__
+    app = tmp_path / "PDF Studio"
+    app.mkdir()
+    (app / win.EXE_NAME).write_bytes(b"MZ")
+    assert not win.refresh_registration(str(app), reg)  # nothing registered yet
+    win.register(str(app / win.EXE_NAME), reg, install_dir=str(app))
+    reg.set(reg.path(win.UNINSTALL_KEY), "DisplayVersion", "0.0.1")
+    assert win.refresh_registration(str(app), reg)
+    assert reg.get(reg.path(win.UNINSTALL_KEY), "DisplayVersion") == __version__
+    assert not win.refresh_registration(str(tmp_path / "another copy"), reg)
+
+
+def test_refresh_registration_of_a_portable_copy(reg, tmp_path):
+    exe = tmp_path / win.EXE_NAME
+    exe.write_bytes(b"MZ")
+    win.register(str(exe), reg)  # opens PDFs, but was never installed
+    assert win.refresh_registration(str(tmp_path), reg)
+    assert reg.get(reg.path(win.UNINSTALL_KEY), "InstallLocation") is None
+
+
+def test_signer_of_an_unsigned_file(tmp_path):
+    exe = tmp_path / win.EXE_NAME
+    exe.write_bytes(b"MZ not signed")
+    assert win.signer(str(exe)) is None
+
+
 def test_create_shortcut(tmp_path):
     exe = tmp_path / "PDFStudio.exe"
     exe.write_bytes(b"MZ")

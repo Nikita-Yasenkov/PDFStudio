@@ -24,8 +24,9 @@
 ## Why PDF Studio
 
 - **Free, with no account.** There is no subscription, no sign-in and no trial.
-- **Private.** It never connects to the internet: no telemetry and no cloud
-  uploads. Your documents and saved signatures stay on your computer.
+- **Private.** It connects to the internet only when you choose **Help → Check
+  for Updates**: no telemetry and no cloud uploads. Your documents and saved
+  signatures stay on your computer.
 - **Fast on big files.** Pages render in tiles that are cached, so scrolling
   and zooming stay smooth with hundreds of pages.
 - **Forgiving.** Almost every action can be undone, even after you save:
@@ -86,6 +87,19 @@ already running, the file opens in a new tab.
 **To uninstall,** use *Settings → Apps → PDF Studio → Uninstall*, or run
 `PDFStudio.exe --uninstall`. This removes the app, its shortcuts and the file
 association.
+
+### Update
+
+Choose **Help → Check for Updates…** (on a Mac, it's in the **PDF Studio**
+menu). If there's a newer version, PDF Studio shows what's new.
+
+- **Windows:** click **Update**, then **Restart Now** when the download is
+  ready. PDF Studio closes, installs the new version in place and opens again
+  with your documents. It asks you to save any unsaved changes first.
+- **macOS:** click **Download** to save the disk image to your Downloads
+  folder, then install it the same way as the first time.
+
+Your settings and saved signatures are kept.
 
 ## Features
 
@@ -228,7 +242,7 @@ src/pdf_studio/
   pdf/          Qt-free PyMuPDF facade: rendering, text, annotations, page ops, editing
   core/         Qt-free logic: document session, undo commands, layout, caches, search
   ui/           PyQt6 app: main window, canvas, tools, panels, dialogs, themes
-  integration/  Windows install, shortcuts and .pdf registration
+  integration/  Windows install, .pdf registration and in-place updates
   packaging/    PyInstaller builds for Windows and macOS
   tests/        pytest suite and fixture generator
 ```

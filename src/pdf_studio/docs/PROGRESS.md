@@ -73,7 +73,7 @@ the development setup).
 | 41 | Signature ink-capture dialog | done | draw pad: smoothing, ink colors/widths, undo, save for reuse |
 | 42 | Milestone 5 tests | done | `tests/test_milestone5.py` |
 
-**Totals:** 42/42 tickets · 316 automated tests (`python -m pytest -q`, ~50 s).
+**Totals:** 42/42 tickets · 368 automated tests (`python -m pytest -q`, ~50 s).
 
 ## Beyond the tickets — Windows desktop install
 
@@ -81,5 +81,11 @@ the development setup).
   per-user install to `%LOCALAPPDATA%\Programs\PDF Studio`, Desktop + Start-menu shortcuts,
   `.pdf` registration (Open with, Default apps, Settings → Apps entry). No admin rights.
 - Single instance: files opened from Explorer go to the running window as tabs.
+- **Help → Check for Updates** (`core/updates.py`, `ui/updates.py`, `ui/dialogs/updates.py`):
+  asks GitHub for the latest release, shows its notes, downloads the file for this computer
+  and checks its SHA-256. The app's only network access, and only on request.
+- In-place updates on Windows (`integration/updater.py`): the new version, started with
+  `--apply-update`, waits for the old one to exit, swaps the app folder with renames (a
+  failure keeps the old version) and reopens the documents.
 - Release builds use a clean uv venv (`build\venv`, pinned in
   `packaging/requirements-build.txt`); bundle trimmed to ~105 MB (46 MB zipped).
