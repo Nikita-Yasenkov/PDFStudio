@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from typing import Optional, Tuple
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
@@ -66,6 +69,20 @@ def vline(parent: Optional[QWidget] = None) -> QFrame:
     f.setObjectName("VSeparator")
     f.setFrameShape(QFrame.Shape.NoFrame)
     return f
+
+
+def reveal_in_folder(path: Optional[str]) -> None:
+    """Show the file selected in Explorer or Finder."""
+    if not path:
+        return
+    if sys.platform == "win32":
+        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+    elif sys.platform == "darwin":  # pragma: no cover
+        subprocess.Popen(["open", "-R", path])
+    else:  # pragma: no cover
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
 
 
 def repolish(w: QWidget) -> None:

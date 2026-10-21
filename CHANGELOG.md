@@ -2,6 +2,18 @@
 
 Each version's section below becomes the notes of its GitHub release.
 
+## 0.1.2
+
+- **macOS:** PDF Studio now runs on Macs with Apple silicon or Intel
+  processors (macOS 13 Ventura or later). Double-clicking a PDF in Finder opens
+  it in PDF Studio once you choose it as the default PDF app.
+- **Windows:** `PDFStudio.exe` shows its name and version in its file
+  properties, and releases can be code-signed.
+- **Check for Updates:** **Help → Check for Updates…** shows what's new in the
+  latest version. On Windows, **Update** installs it and reopens your
+  documents; on a Mac, it downloads the disk image. This is the only time
+  PDF Studio connects to the internet, and only when you choose it.
+
 ## 0.1.1
 
 - **Search panel:** the search field and options now stay at the top of the

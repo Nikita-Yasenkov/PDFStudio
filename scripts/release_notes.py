@@ -1,14 +1,17 @@
 """Print the GitHub release notes for a version.
 
-    python scripts/release_notes.py 0.1.1 dist/PDFStudio-win64.zip
+    python scripts/release_notes.py 0.1.2 dist/PDFStudio-win64.zip dist/PDFStudio-macos-arm64.dmg
+    python scripts/release_notes.py --check 0.1.2
 
 The notes are the version's section of CHANGELOG.md, followed by install
-steps and the SHA-256 of the zip. Exits with an error when CHANGELOG.md has
-no section for the version, so a release can't go out without notes.
+steps and the SHA-256 of each file. Exits with an error when CHANGELOG.md has
+no section for the version, so a release can't go out without notes;
+``--check`` only does that test.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import os
 import re
@@ -16,20 +19,29 @@ import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-INSTALL = """\
-### Get started
+WINDOWS = """\
+**Windows** (10 or 11, 64-bit): download **PDFStudio-win64.zip**, unzip it and run \
+`PDFStudio\\PDFStudio.exe`. To add shortcuts and open PDFs with it, use \
+**Help → PDF Studio on This Computer… → Install for this user** (no administrator rights \
+needed). If SmartScreen shows "Windows protected your PC", click **More info → Run anyway**."""
 
-1. Download **PDFStudio-win64.zip** below. It needs Windows 10 or 11, 64-bit.
-2. Unzip it and run `PDFStudio\\PDFStudio.exe`. No install is needed.
-3. Optional: open **Help → PDF Studio on This Computer…** and click **Install for this user**. \
-This adds Desktop and Start-menu shortcuts and registers PDF Studio for `.pdf` files, \
-without administrator rights.
+MACOS = """\
+**macOS** (13 Ventura or later): download the disk image for your Mac \
+(**arm64** for Apple silicon, **x86_64** for Intel), open it and drag PDF Studio to \
+Applications."""
 
-**Updating:** close PDF Studio, then run the new version and install it the same way. \
-Your settings and saved signatures are kept.
+MACOS_NOT_NOTARIZED = """ \
+This build isn't notarized by Apple, so the first time macOS says it can't verify it: open \
+**System Settings → Privacy & Security**, scroll down and click **Open Anyway**."""
 
-The app isn't code-signed yet, so Windows SmartScreen may show "Windows protected your PC" \
-the first time. Click **More info → Run anyway**."""
+UPDATING = """\
+**Updating:** close PDF Studio and install the new version the same way. Your settings and \
+saved signatures are kept."""
+
+
+def install_text(mac_notarized: bool) -> str:
+    mac = MACOS if mac_notarized else MACOS + MACOS_NOT_NOTARIZED
+    return f"### Get started\n\n{WINDOWS}\n\n{mac}\n\n{UPDATING}"
 
 
 def changelog_section(version: str, path: str = os.path.join(ROOT, "CHANGELOG.md")) -> str:
@@ -49,13 +61,30 @@ def sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def notes(version: str, zip_path: str) -> str:
-    return (f"{changelog_section(version)}\n\n{INSTALL}\n\n"
-            f"**SHA-256** `{os.path.basename(zip_path)}`: `{sha256(zip_path)}`\n")
+def notes(version: str, files: list, mac_notarized: bool = False) -> str:
+    sums = "\n".join(f"- `{os.path.basename(p)}`: `{sha256(p)}`" for p in sorted(files))
+    return (f"{changelog_section(version)}\n\n{install_text(mac_notarized)}\n\n"
+            f"**SHA-256**\n\n{sums}\n")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Release notes from CHANGELOG.md")
+    ap.add_argument("version")
+    ap.add_argument("files", nargs="*", help="release assets to list with their SHA-256")
+    ap.add_argument("--check", action="store_true", help="only check that the notes exist")
+    ap.add_argument("--mac-notarized", action="store_true",
+                    help="the macOS apps are notarized (no Open Anyway step)")
+    args = ap.parse_args()
+    if args.check:
+        changelog_section(args.version)
+        print(f"CHANGELOG.md has notes for {args.version}")
+        return 0
+    if not args.files:
+        ap.error("give the release files, or use --check")
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.write(notes(args.version, args.files, args.mac_notarized))
+    return 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit(__doc__)
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stdout.write(notes(sys.argv[1], sys.argv[2]))
+    sys.exit(main())

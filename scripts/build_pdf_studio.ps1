@@ -5,13 +5,14 @@
 #   .\scripts\build_pdf_studio.ps1 -Smoke           # build + headless self-test
 #   .\scripts\build_pdf_studio.ps1 -Smoke -Install  # ...and install for this user
 #   .\scripts\build_pdf_studio.ps1 -Smoke -Zip      # ...and create dist\PDFStudio-win64.zip
+#   .\scripts\build_pdf_studio.ps1 -SkipBuild -Zip  # zip an existing (e.g. signed) build
 #
 # Uses a dedicated uv virtual environment (build\venv) containing only PyQt6,
 # PyMuPDF and PyInstaller at the versions pinned in
 # src\pdf_studio\packaging\requirements-build.txt.
 # Output: dist\PDFStudio\PDFStudio.exe
 
-param([switch]$Smoke, [switch]$Install, [switch]$Zip)
+param([switch]$Smoke, [switch]$Install, [switch]$Zip, [switch]$SkipBuild)
 
 # PyInstaller logs to stderr; with "Stop", Windows PowerShell 5.1 would treat
 # that as a failure. Exit codes are checked explicitly instead.
@@ -23,24 +24,26 @@ function Assert-Ok($what) {
     if ($LASTEXITCODE -ne 0) { Write-Error "$what failed ($LASTEXITCODE)"; exit 1 }
 }
 
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Error "uv is required: https://docs.astral.sh/uv/getting-started/installation/"
-    exit 1
-}
+if (-not $SkipBuild) {
+    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+        Write-Error "uv is required: https://docs.astral.sh/uv/getting-started/installation/"
+        exit 1
+    }
 
-$extra = @()
-if ($Smoke) { $extra += "--smoke" }
+    $extra = @()
+    if ($Smoke) { $extra += "--smoke" }
 
-$venv = Join-Path $Root "build\venv"
-$py = Join-Path $venv "Scripts\python.exe"
-if (-not (Test-Path $py)) {
-    uv venv $venv --python 3.12;                                    Assert-Ok "uv venv"
+    $venv = Join-Path $Root "build\venv"
+    $py = Join-Path $venv "Scripts\python.exe"
+    if (-not (Test-Path $py)) {
+        uv venv $venv --python 3.12;                                    Assert-Ok "uv venv"
+    }
+    uv pip install --python $py -r src\pdf_studio\packaging\requirements-build.txt -q
+    Assert-Ok "uv pip install"
+    $env:PYTHONPATH = Join-Path $Root "src"
+    & $py -m pdf_studio.packaging.build_windows --work (Join-Path $Root "build\pyinstaller") @extra 2>&1 | ForEach-Object { "$_" }
+    Assert-Ok "Build"
 }
-uv pip install --python $py -r src\pdf_studio\packaging\requirements-build.txt -q
-Assert-Ok "uv pip install"
-$env:PYTHONPATH = Join-Path $Root "src"
-& $py -m pdf_studio.packaging.build_windows --work (Join-Path $Root "build\pyinstaller") @extra 2>&1 | ForEach-Object { "$_" }
-Assert-Ok "Build"
 
 $exe = Join-Path $Root "dist\PDFStudio\PDFStudio.exe"
 Copy-Item (Join-Path $Root "LICENSE") (Join-Path $Root "dist\PDFStudio\LICENSE.txt")

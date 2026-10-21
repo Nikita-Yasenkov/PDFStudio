@@ -23,8 +23,9 @@ handles never leave it. Tests enforce that `ui/` does not import `fitz` or
 | Package | Key modules |
 |---|---|
 | `pdf` | `engine.PdfDocument` (open, info, render, text, outline, search, save), `annotations`, `page_operations`, `editing` (redact/replace, image cover, content snapshots), `documents` (extract/split/merge files) |
-| `core` | `session.DocumentSession`, `commands.CommandStack`, `*_commands`, `geometry` (coordinate transforms), `layout` (view modes), `zoom`, `render_cache`, `render_queue`, `selection`, `page_ranges` |
-| `ui` | `main_window`, `document_view` (one per tab), `canvas` (virtualized page view), `render_service` (worker thread), `tools` (ToolController + tools), sidebar panels, `properties_panel`, `theme`, `icons`, `settings`, dialogs |
+| `core` | `session.DocumentSession`, `commands.CommandStack`, `*_commands`, `geometry` (coordinate transforms), `layout` (view modes), `zoom`, `render_cache`, `render_queue`, `selection`, `page_ranges`, `updates` (latest-release parsing, version compare) |
+| `ui` | `main_window`, `document_view` (one per tab), `canvas` (virtualized page view), `render_service` (worker thread), `tools` (ToolController + tools), sidebar panels, `properties_panel`, `theme`, `icons`, `settings`, `updates` (HTTPS for Check for Updates), dialogs |
+| `integration` | `windows` (per-user install, .pdf registration), `updater` (install an update over the app folder) |
 
 ## 2. Coordinates
 

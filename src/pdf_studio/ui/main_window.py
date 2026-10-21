@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from typing import Dict, List, Optional
 
@@ -22,7 +21,7 @@ from .dialogs import prompts
 from .document_view import DocumentView
 from .empty_state import EmptyState
 from .icons import ICON_SIZE, icons
-from .qtutil import human_size
+from .qtutil import human_size, reveal_in_folder
 from .render_service import RenderService
 from ..core.page_commands import (DeletePagesCommand, DuplicatePagesCommand,
                                   InsertBlankPageCommand, InsertPdfCommand,
@@ -77,6 +76,7 @@ class MainWindow(QMainWindow):
         self._tool_name = "select"
         self.render_service = RenderService(parent=self)
         self.tool_defaults = ToolDefaults(self.settings, self)
+        self._update_dialog = None
 
         self._build_actions()
         self._build_menus()
@@ -311,6 +311,10 @@ class MainWindow(QMainWindow):
           "Version and library information")
         A("integration", f"{APP_NAME} on This &Computer…", self.show_integration, None,
           "monitor", "Install PDF Studio and make it the default PDF app")
+        A("check_updates", "Check for &Updates…", self.check_for_updates, None, "download",
+          "See whether a newer version of PDF Studio is available")
+        # macOS: in the application menu, below About
+        self.actions["check_updates"].setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
         # Window / tabs
         A("next_tab", "Next Tab", lambda: self._cycle_tab(+1), "Ctrl+Tab", None,
           "Switch to the next document")
@@ -397,8 +401,10 @@ class MainWindow(QMainWindow):
         m = mb.addMenu("&Help")
         m.addAction(self.actions["shortcuts"])
         m.addSeparator()
-        m.addAction(self.actions["integration"])
-        m.addSeparator()
+        if sys.platform == "win32":  # per-user install and .pdf registration
+            m.addAction(self.actions["integration"])
+            m.addSeparator()
+        m.addAction(self.actions["check_updates"])
         m.addAction(self.actions["about"])
         self.help_menu = m
 
@@ -704,14 +710,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _reveal(path: Optional[str]) -> None:
-        if not path:
-            return
-        if sys.platform == "win32":
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
-        else:  # pragma: no cover
-            from PyQt6.QtCore import QUrl
-            from PyQt6.QtGui import QDesktopServices
-            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
+        reveal_in_folder(path)
 
     def _refresh_tab(self, view: DocumentView) -> None:
         i = self._index_of(view)
@@ -1251,6 +1250,36 @@ class MainWindow(QMainWindow):
 
     def show_integration(self) -> None:
         prompts.show_integration(self)
+
+    def check_for_updates(self) -> None:
+        """Help → Check for Updates, the only time PDF Studio goes online."""
+        from .dialogs.updates import UpdateDialog
+        if self._update_dialog is None:
+            self._update_dialog = UpdateDialog(self)
+            self._update_dialog.restartRequested.connect(self.restart_to_update)
+        self._update_dialog.check()  # a running check or download just carries on
+        self._update_dialog.show()
+        self._update_dialog.raise_()
+        self._update_dialog.activateWindow()
+
+    def restart_to_update(self, new_exe: str, app_dir: str) -> None:
+        """Close the documents (asking to save changes) and quit; the new
+        version then replaces this one and opens them again."""
+        from ..integration import updater
+        files = []
+        for v in list(self.views()):
+            if not self.close_view(v):
+                return
+            if v.session.path:
+                files.append(v.session.path)
+        try:
+            updater.launch_update(new_exe, app_dir, os.getpid(), files)
+        except OSError as exc:
+            prompts.show_error(self, "Update", "The update couldn't start.", str(exc))
+            for path in files:
+                self.open_path(path)
+            return
+        self.close()
 
     def receive_files(self, paths: List[str]) -> None:
         """Files sent by a second launch (e.g. double-clicked in Explorer)."""

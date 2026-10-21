@@ -14,19 +14,18 @@ from __future__ import annotations
 
 import ctypes
 import os
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 from .. import APP_NAME, __version__
+from .updater import EXE_NAME, replace_folder
 
 IS_WINDOWS = sys.platform == "win32"
 if IS_WINDOWS:  # pragma: no branch
     import winreg
 
-EXE_NAME = "PDFStudio.exe"
 PROG_ID = "PDFStudio.PDF"
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PDFStudio"
 CAPABILITIES_KEY = r"Software\PDF Studio\Capabilities"
@@ -165,6 +164,21 @@ def registered_exe(reg: Optional[Registry] = None) -> Optional[str]:
     return cmd.split('"')[1] if cmd.startswith('"') else cmd.split()[0]
 
 
+def refresh_registration(app_dir: str, reg: Optional[Registry] = None) -> bool:
+    """After an update of the app in ``app_dir``: if it's the registered copy,
+    register it again, so Settings → Apps shows the new version. The
+    uninstall entry is only written when it was installed there."""
+    reg = reg or Registry()
+    exe = registered_exe(reg)
+    same = os.path.normcase(os.path.abspath(app_dir))
+    if not exe or os.path.normcase(os.path.dirname(os.path.abspath(exe))) != same:
+        return False
+    installed = reg.get(reg.path(UNINSTALL_KEY), "InstallLocation")
+    in_place = bool(installed) and os.path.normcase(os.path.abspath(installed)) == same
+    register(os.path.join(app_dir, EXE_NAME), reg, install_dir=app_dir if in_place else None)
+    return True
+
+
 def current_default_progid() -> Optional[str]:
     """ProgID the user chose for .pdf (Explorer's UserChoice), if any."""
     return Registry().get(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts"
@@ -208,6 +222,20 @@ def _powershell(script: str) -> str:
     return out.stdout.strip()
 
 
+def signer(path: str) -> Optional[str]:
+    """Subject of the file's valid Authenticode signature; None when it is
+    unsigned or the signature isn't valid."""
+    if not IS_WINDOWS:
+        return None
+    q = path.replace("'", "''")
+    try:
+        out = _powershell(f"$s = Get-AuthenticodeSignature -LiteralPath '{q}'; "
+                          "if ($s.Status -eq 'Valid') { $s.SignerCertificate.Subject }")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out or None
+
+
 def special_folder(name: str) -> str:
     """'Desktop' or 'Programs' (Start menu) for the current user."""
     return _powershell(f"[Environment]::GetFolderPath('{name}')")
@@ -239,12 +267,7 @@ def install(source_dir: str, target_dir: Optional[str] = None, shortcuts: bool =
     if not os.path.isfile(os.path.join(source_dir, EXE_NAME)):
         raise FileNotFoundError(f"{EXE_NAME} not found in {source_dir}")
     if os.path.normcase(source_dir) != os.path.normcase(target_dir):
-        if os.path.isdir(target_dir):
-            try:
-                shutil.rmtree(target_dir)
-            except OSError as exc:
-                raise OSError(f"Close {APP_NAME} before reinstalling ({exc.strerror or exc})") from exc
-        shutil.copytree(source_dir, target_dir)
+        replace_folder(source_dir, target_dir)  # a failure keeps the installed copy
     exe = os.path.join(target_dir, EXE_NAME)
     result = InstallResult(exe=exe, install_dir=target_dir)
     if shortcuts:
