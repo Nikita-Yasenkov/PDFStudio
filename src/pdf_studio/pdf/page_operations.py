@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import pymupdf as fitz
 
+from .editing import unshare_objects
 from .errors import PageOperationError
 
 TocEntry = list
@@ -111,8 +112,10 @@ def duplicate_page(doc: fitz.Document, index: int, to: Optional[int] = None) -> 
     target = index + 1 if to is None else int(to)
     if target >= doc.page_count:
         doc.fullcopy_page(index, -1)
-        return doc.page_count - 1
-    doc.fullcopy_page(index, target)
+        target = doc.page_count - 1
+    else:
+        doc.fullcopy_page(index, target)
+    unshare_objects(doc[target])
     return target
 
 

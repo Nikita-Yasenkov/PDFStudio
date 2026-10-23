@@ -8,6 +8,7 @@ the top-left of the page as the user sees it (i.e. after the page's
 from __future__ import annotations
 
 import enum
+import uuid
 from dataclasses import dataclass, field, replace
 from typing import Iterable, Optional, Sequence, Tuple
 
@@ -295,6 +296,24 @@ class ImageInfo:
     rect: Rect
     width: int
     height: int
+
+
+@dataclass(frozen=True)
+class PlacedObject:
+    """Replacement text or an image placed by PDF Studio. It is page content
+    (not an annotation), but can still be moved, resized and deleted."""
+    id: str
+    kind: str             # "text" or "image"
+    rect: Rect
+
+    @property
+    def label(self) -> str:
+        return "Text" if self.kind == "text" else "Image"
+
+
+def new_object_id() -> str:
+    """A fresh :class:`PlacedObject` id (also a valid PDF name)."""
+    return uuid.uuid4().hex[:12]
 
 
 @dataclass(frozen=True)

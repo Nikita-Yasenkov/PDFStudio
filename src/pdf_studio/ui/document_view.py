@@ -15,9 +15,10 @@ from PyQt6.QtWidgets import QAbstractScrollArea, QWidget
 from ..core import zoom as zm
 from ..core.layout import ViewMode, next_page_index
 from ..core.annotation_commands import DeleteAnnotationCommand
-from ..core.annotation_geometry import handles
+from ..core.annotation_geometry import corner_handles, handles
+from ..core.edit_commands import DeleteObjectCommand
 from ..core.selection import TextSelection, select_all
-from ..pdf.models import AnnotationKind, AnnotationModel
+from ..pdf.models import AnnotationKind, AnnotationModel, PlacedObject, Rect
 from ..core.session import DocumentSession, EventKind, SessionEvent
 from . import theme
 from .canvas import PageCanvas
@@ -29,10 +30,19 @@ from .tools import ToolController
 from .widgets import Toast
 
 
+HANDLE = 7.0  # px
+
+
+def _paint_handles(p, canvas, index: int, points, accent: QColor) -> None:
+    p.setPen(QPen(accent, 1.4))
+    p.setBrush(QColor(theme.current().surface))
+    for hp in points:
+        c = canvas.pdf_to_widget(index, hp)
+        p.drawRoundedRect(QRectF(c.x() - HANDLE / 2, c.y() - HANDLE / 2, HANDLE, HANDLE), 2, 2)
+
+
 class _AnnotationOverlay:
     """Hover outline, selection frame + handles and the move/resize ghost."""
-
-    HANDLE = 7.0
 
     def __init__(self, view: "DocumentView"):
         self.view = view
@@ -88,13 +98,7 @@ class _AnnotationOverlay:
             self._outline(p, canvas, index, shown, QPen(accent, 1.4, Qt.PenStyle.DashLine
                                                         if preview is not None else Qt.PenStyle.SolidLine))
             if preview is None:
-                for _name, hp in handles(shown):
-                    c = canvas.pdf_to_widget(index, hp)
-                    h = self.HANDLE
-                    rect = QRectF(c.x() - h / 2, c.y() - h / 2, h, h)
-                    p.setPen(QPen(accent, 1.4))
-                    p.setBrush(QColor(t.surface))
-                    p.drawRoundedRect(rect, 2, 2)
+                _paint_handles(p, canvas, index, [hp for _n, hp in handles(shown)], accent)
         p.restore()
 
     def _ghost(self, p, canvas, index: int, m: AnnotationModel, fill: QColor, line: QColor) -> None:
@@ -122,6 +126,46 @@ class _AnnotationOverlay:
             p.drawEllipse(r)
         else:
             p.drawRect(r)
+
+
+class _ObjectOverlay:
+    """The same frame, handles and ghost for placed text and images."""
+
+    def __init__(self, view: "DocumentView"):
+        self.view = view
+
+    def paint(self, p, canvas, slots) -> None:
+        view = self.view
+        visible = {s.index for s in slots}
+        accent = QColor(theme.current().annot_select)
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        hov = view.placed_object(view.hover_object) if view.hover_object != view.selected_object else None
+        if hov is not None and hov[0] in visible:
+            c = QColor(accent)
+            c.setAlpha(110)
+            p.setPen(QPen(c, 1.2))
+            r = canvas.pdf_rect_to_widget(hov[0], hov[1].rect)
+            if r is not None:
+                p.drawRect(r.adjusted(-3, -3, 3, 3))
+        sel = view.selected_placed_object()
+        if sel is not None and sel[0] in visible:
+            index, obj = sel
+            preview = view.object_preview
+            rect = preview[1] if preview is not None and preview[0] == index else obj.rect
+            r = canvas.pdf_rect_to_widget(index, rect)
+            if r is not None:
+                if preview is not None:
+                    ghost = QColor(accent)
+                    ghost.setAlpha(40)
+                    p.fillRect(r, ghost)
+                p.setPen(QPen(accent, 1.4, Qt.PenStyle.DashLine if preview is not None
+                              else Qt.PenStyle.SolidLine))
+                p.drawRect(r.adjusted(-3, -3, 3, 3))
+                if preview is None:
+                    _paint_handles(p, canvas, index, [hp for _n, hp in corner_handles(rect)], accent)
+        p.restore()
 
 
 class _SelectionOverlay:
@@ -176,7 +220,12 @@ class DocumentView(QWidget):
         self.selected_annot: Optional[Tuple[int, str]] = None   # (page id, annot id)
         self.hover_annot: Optional[Tuple[int, str]] = None
         self.annotation_preview: Optional[Tuple[int, AnnotationModel]] = None
+        # placed text/images (page content that can still be moved)
+        self.selected_object: Optional[Tuple[int, str]] = None  # (page id, object id)
+        self.hover_object: Optional[Tuple[int, str]] = None
+        self.object_preview: Optional[Tuple[int, Rect]] = None
         self.canvas.overlays.append(_SelectionOverlay(self))
+        self.canvas.overlays.append(_ObjectOverlay(self))
         self.canvas.overlays.append(_AnnotationOverlay(self))
         self.tools = ToolController(self, tool_defaults)
         self.bar = PageZoomBar(self)
@@ -352,6 +401,9 @@ class DocumentView(QWidget):
 
     # ------------------------------------------------------- session events
     def _on_session_event(self, event: SessionEvent) -> None:
+        if (event.kind in (EventKind.PAGES, EventKind.STRUCTURE) and self.selected_object is not None
+                and self.selected_placed_object() is None):
+            self.clear_object_selection()
         if event.kind == EventKind.STRUCTURE:
             self.clear_selection()
             if self.selected_annot is not None and self.selected_annotation() is None:
@@ -400,6 +452,7 @@ class DocumentView(QWidget):
         if key == self.selected_annot:
             return
         self.selected_annot = key
+        self.selected_object = None  # one selection at a time
         self.canvas.viewport().update()
         self.annotationSelectionChanged.emit()
 
@@ -441,6 +494,54 @@ class DocumentView(QWidget):
                                                   f"Delete {m.kind.label.lower()}"))
         if ok:
             self.clear_annotation_selection()
+        return ok
+
+    # ------------------------------------------ placed text / image selection
+    def select_object(self, page: int, object_id: str) -> None:
+        key = (self.session.page_id(page), object_id)
+        if key == self.selected_object:
+            return
+        self.selected_object = key
+        self.selected_annot = None  # one selection at a time
+        self.canvas.viewport().update()
+        self.annotationSelectionChanged.emit()
+
+    def clear_object_selection(self) -> bool:
+        if self.selected_object is None:
+            return False
+        self.selected_object = None
+        self.canvas.viewport().update()
+        self.annotationSelectionChanged.emit()
+        return True
+
+    def is_object_selected(self, page: int, object_id: str) -> bool:
+        return self.selected_object == (self.session.page_id(page), object_id)
+
+    def placed_object(self, key: Optional[Tuple[int, str]]) -> Optional[Tuple[int, PlacedObject]]:
+        """(page index, object) for a (page id, object id) key, if it still exists."""
+        if key is None or self.session.doc.closed:
+            return None
+        index = self.session.index_of(key[0])
+        obj = self.session.placed_object(*key)
+        return (index, obj) if index is not None and obj is not None else None
+
+    def selected_placed_object(self) -> Optional[Tuple[int, PlacedObject]]:
+        return self.placed_object(self.selected_object)
+
+    def set_hover_object(self, key: Optional[Tuple[int, str]]) -> None:
+        if key != self.hover_object:
+            self.hover_object = key
+            self.canvas.viewport().update()
+
+    def delete_selected_object(self) -> bool:
+        sel = self.selected_placed_object()
+        if sel is None:
+            return False
+        page, obj = sel
+        ok = self.execute(DeleteObjectCommand(self.session.page_id(page), obj.id,
+                                              f"Delete {obj.label.lower()}"))
+        if ok:
+            self.clear_object_selection()
         return ok
 
     def edit_annotation(self, page: int, m: AnnotationModel) -> None:

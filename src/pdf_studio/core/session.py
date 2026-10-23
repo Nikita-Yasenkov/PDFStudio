@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..pdf import (ENGINE_LOCK, AnnotationModel, ImageInfo, OutlineEntry, PageInfo,
-                   PageOperationError, PdfDocument, Rect, RenderedImage, SaveResult,
-                   SearchHit, TextStyle, Word)
+                   PageOperationError, PdfDocument, PlacedObject, Rect, RenderedImage,
+                   SaveResult, SearchHit, TextStyle, Word)
 
 _session_ids = itertools.count(1)
 
@@ -69,6 +69,7 @@ class DocumentSession:
         self._words: Dict[Tuple[int, int], List[Word]] = {}
         self._annots: Dict[Tuple[int, int], List[AnnotationModel]] = {}
         self._images: Dict[Tuple[int, int], List[ImageInfo]] = {}
+        self._objects: Dict[Tuple[int, int], List[PlacedObject]] = {}
         self._outline: Optional[List[OutlineEntry]] = None
         from .commands import CommandStack  # local: avoid import cycle
         self.stack = CommandStack(self)
@@ -399,6 +400,23 @@ class DocumentSession:
             self._images[key] = cached
         return cached
 
+    def placed_objects(self, index: int) -> List[PlacedObject]:
+        """Movable text/images on a page, topmost last (cached per revision)."""
+        key = self.render_key(index)
+        cached = self._objects.get(key)
+        if cached is None:
+            cached = self.doc.placed_objects(index)
+            if len(self._objects) > 64:
+                self._objects.clear()
+            self._objects[key] = cached
+        return cached
+
+    def placed_object(self, page_id: int, object_id: str) -> Optional[PlacedObject]:
+        index = self.index_of(page_id)
+        if index is None or not object_id:
+            return None
+        return next((o for o in self.placed_objects(index) if o.id == object_id), None)
+
     def _edit(self, page_id: int, fn):
         with ENGINE_LOCK:
             index = self._indices([page_id])[0]
@@ -430,15 +448,25 @@ class DocumentSession:
         return snap
 
     def replace_text(self, page_id: int, rect: Rect, text: str, style: TextStyle,
-                     fill=None, align: int = 0):
+                     fill=None, align: int = 0, object_id: Optional[str] = None):
         """Returns (font size used, snapshot)."""
         return self._edit(page_id, lambda i: self.doc.replace_text(i, rect, text, style,
-                                                                     fill, align))
+                                                                     fill, align, object_id))
 
     def place_image(self, page_id: int, rect: Rect, image: bytes, keep_aspect: bool = True,
-                    cover: bool = True, fill=(1.0, 1.0, 1.0)):
-        _r, snap = self._edit(page_id, lambda i: self.doc.place_image(i, rect, image,
-                                                                       keep_aspect, cover, fill))
+                    cover: bool = True, fill=(1.0, 1.0, 1.0), object_id: Optional[str] = None,
+                    replaces: Optional[str] = None):
+        _r, snap = self._edit(page_id, lambda i: self.doc.place_image(
+            i, rect, image, keep_aspect, cover, fill, object_id, replaces))
+        return snap
+
+    def transform_object(self, page_id: int, object_id: str, rect: Rect):
+        """Move/resize placed text or an image to ``rect``."""
+        _r, snap = self._edit(page_id, lambda i: self.doc.transform_object(i, object_id, rect))
+        return snap
+
+    def delete_object(self, page_id: int, object_id: str):
+        _r, snap = self._edit(page_id, lambda i: self.doc.delete_object(i, object_id))
         return snap
 
     # ----------------------------------------------------------------- save

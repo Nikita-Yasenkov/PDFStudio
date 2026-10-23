@@ -266,7 +266,7 @@ class MainWindow(QMainWindow):
         A("redo", "&Redo", self._view_call("redo"), ["Ctrl+Shift+Z", "Ctrl+Y"], "redo",
           "Redo the last undone change")
         A("delete", "&Delete", self.delete_selection, QKeySequence.StandardKey.Delete, "delete",
-          "Delete the selected annotation")
+          "Delete the selected annotation, text or image")
         A("properties", "&Properties", self._show_properties, "Ctrl+I", "settings",
           "Show the properties of the selected annotation or tool")
         A("copy", "&Copy", self._view_call("copy_selection"), QKeySequence.StandardKey.Copy,
@@ -1216,8 +1216,8 @@ class MainWindow(QMainWindow):
         ("Canvas", "Pan with any tool", "Hold Space + drag  or  middle-drag"),
         ("Canvas", "Zoom around the pointer", "Ctrl + mouse wheel  or  pinch"),
         ("Canvas", "Cancel / deselect / back to Select", "Esc"),
-        ("Canvas", "Delete the selected annotation", "Delete"),
-        ("Canvas", "Nudge the selected annotation (10 pt with Shift)", "Arrow keys"),
+        ("Canvas", "Delete the selected annotation, text or image", "Delete"),
+        ("Canvas", "Nudge the selected item (10 pt with Shift)", "Arrow keys"),
         ("Canvas", "Edit the selected annotation", "Enter  or  double-click"),
         ("Canvas", "Square / circle / 45° lines while drawing", "Shift + drag"),
         ("Thumbnails", "Delete selected pages", "Delete"),
@@ -1419,7 +1419,8 @@ class MainWindow(QMainWindow):
         v = self.view
         self.actions["copy"].setEnabled(v is not None and v.text_selection is not None)
         self.actions["select_all"].setEnabled(v is not None)
-        self.actions["delete"].setEnabled(v is not None and v.selected_annot is not None)
+        self.actions["delete"].setEnabled(v is not None and (v.selected_annot is not None
+                                                             or v.selected_object is not None))
         self.actions["properties"].setEnabled(v is not None)
 
     def delete_selection(self) -> None:
@@ -1429,7 +1430,7 @@ class MainWindow(QMainWindow):
         if self.thumbnails.list.hasFocus() and self.thumbnails.selected_rows():
             self.delete_pages([v.session.page_id(r) for r in self.thumbnails.selected_rows()])
         else:
-            v.delete_selected_annotation()
+            v.delete_selected_annotation() or v.delete_selected_object()
 
     def _show_properties(self) -> None:
         if self.view is not None:

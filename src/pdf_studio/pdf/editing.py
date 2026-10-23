@@ -5,6 +5,11 @@ All rects are displayed page space. Redaction is real: text under the box
 is removed from the content stream (images and vector art are left in place
 and covered by the fill). Replacement text is box-bound (no reflow).
 
+Replacement text and placed images are *placed objects*: each is drawn as
+its own Form XObject, tagged with PDF Studio keys, so it stays page content
+(searchable, printed, flattened) yet can be moved, resized or deleted later
+by rewriting the form's /Matrix or dropping its ``Do``.
+
 Undo uses :class:`ContentSnapshot`: the page's /Contents and /Resources
 entries plus every content stream, resource sub-dictionary and form XObject
 they reference, captured before the edit and written back on undo. Object
@@ -22,10 +27,17 @@ from typing import Dict, List, Optional, Tuple, Union
 import pymupdf as fitz
 
 from .errors import EditError
-from .models import Color, Rect, TextStyle
+from .models import Color, PlacedObject, Point, Rect, TextStyle, new_object_id
+from .stamps import fit_into
 
 _REF = re.compile(r"(\d+) 0 R")
 _RES_KEYS = ("Font", "XObject", "ExtGState", "ColorSpace", "Pattern", "Shading", "Properties")
+
+#: keys tagging a Form XObject as a placed object. MuPDF renames or copies
+#: forms when it rewrites a page (a later redaction does); the keys travel
+#: with the copy, so objects are found by id, never by name or xref.
+_OBJ_KIND = "PDFStudioKind"   # /Text or /Image
+_OBJ_ID = "PDFStudioId"       # a name, stable for the object's lifetime
 
 #: base-14 font aliases used for replacement text: (regular, bold, italic, bold-italic)
 _FAMILIES = {
@@ -189,8 +201,178 @@ def probe_text_style(page: fitz.Page, rect: Rect) -> TextStyle:
                      text=text, background=background)
 
 
+# ----------------------------------------------------------- placed objects
+def _numbers(value: str) -> List[float]:
+    return [float(v) for v in value.strip("[] ").split()]
+
+
+def _pdf_num(v: float) -> str:
+    s = f"{v:.4f}".rstrip("0").rstrip(".")
+    return "0" if s in ("", "-0") else s
+
+
+def _to_display(page: fitz.Page) -> fitz.Matrix:
+    """PDF space → displayed page space."""
+    return page.transformation_matrix * page.rotation_matrix
+
+
+def _form_matrix(doc: fitz.Document, xref: int) -> fitz.Matrix:
+    t, v = doc.xref_get_key(xref, "Matrix")
+    return fitz.Matrix(*_numbers(v)) if t == "array" else fitz.Matrix()
+
+
+def _form_rect(page: fitz.Page, xref: int) -> Rect:
+    doc = page.parent
+    bbox = fitz.Rect(_numbers(doc.xref_get_key(xref, "BBox")[1]))
+    r = (bbox * _form_matrix(doc, xref) * _to_display(page)).normalize()
+    return Rect(r.x0, r.y0, r.x1, r.y1)
+
+
+def _do_pattern(name: str) -> "re.Pattern[bytes]":
+    return re.compile(rb"/" + re.escape(name.encode("latin-1")) + rb"\s+Do\b")
+
+
+def _objects(page: fitz.Page) -> List[Tuple[str, str, int, str]]:
+    """(id, kind, xref, resource name) of the objects drawn on ``page``,
+    in drawing order (topmost last)."""
+    doc = page.parent
+    tagged = []
+    for xref, name, invoker, _bbox in page.get_xobjects():
+        if invoker == 0:
+            t, oid = doc.xref_get_key(xref, _OBJ_ID)
+            if t == "name":
+                tagged.append((oid[1:], xref, name))
+    if not tagged:
+        return []
+    content = page.read_contents()
+    found = []
+    for oid, xref, name in tagged:
+        hits = [m.start() for m in _do_pattern(name).finditer(content)]
+        if hits:  # a deleted object is no longer drawn
+            kind = doc.xref_get_key(xref, _OBJ_KIND)[1].lstrip("/").lower() or "text"
+            found.append((hits[-1], oid, kind, xref, name))
+    found.sort()
+    return [(oid, kind, xref, name) for _pos, oid, kind, xref, name in found]
+
+
+def placed_objects(page: fitz.Page) -> List[PlacedObject]:
+    return [PlacedObject(oid, kind, _form_rect(page, xref))
+            for oid, kind, xref, _name in _objects(page)]
+
+
+def _find_object(page: fitz.Page, object_id: str) -> Tuple[int, str]:
+    for oid, _kind, xref, name in _objects(page):
+        if oid == object_id:
+            return xref, name
+    raise EditError("This item is no longer on the page")
+
+
+def _show_object(page: fitz.Page, src: fitz.Document, clip: fitz.Rect, target: Rect,
+                 kind: str, object_id: str) -> None:
+    """Draw ``clip`` of page 0 of ``src`` (laid out upright, in displayed
+    orientation) into ``target`` as a tagged form."""
+    doc = page.parent
+    before = {name for _x, name, invoker, _b in page.get_xobjects() if invoker == 0}
+    page.show_pdf_page(_unrot(page, target), src, 0, clip=clip, keep_proportion=False,
+                       rotate=page.rotation)
+    xref = next(x for x, name, invoker, _b in page.get_xobjects()
+                if invoker == 0 and name not in before)
+    doc.xref_set_key(xref, _OBJ_KIND, f"/{kind}")
+    doc.xref_set_key(xref, _OBJ_ID, f"/{object_id}")
+    # PyMuPDF keeps a graft map per source document; this one is single-use
+    getattr(doc, "Graftmaps", {}).pop(src._graft_id, None)
+    getattr(doc, "ShownPages", {}).pop((src._graft_id, 0), None)
+
+
+def transform_object(page: fitz.Page, object_id: str, rect: Rect) -> None:
+    """Move/scale a placed object so it fills ``rect``."""
+    if rect.is_empty:
+        raise EditError("The new size is empty")
+    doc = page.parent
+    xref, _name = _find_object(page, object_id)
+    old = _form_rect(page, xref)
+    if old.is_empty:
+        raise EditError("This item has no size")
+    sx, sy = rect.width / old.width, rect.height / old.height
+    t = fitz.Matrix(sx, 0, 0, sy, rect.x0 - old.x0 * sx, rect.y0 - old.y0 * sy)
+    d = _to_display(page)
+    m = _form_matrix(doc, xref) * d * t * ~d
+    doc.xref_set_key(xref, "Matrix", "[" + " ".join(_pdf_num(v) for v in m) + "]")
+
+
+def _xobject_dict(doc: fitz.Document, page: fitz.Page,
+                  copy=None) -> Optional[Tuple[int, str]]:
+    """(xref, key prefix) addressing the page's /XObject resources without
+    passing through an indirect object (``xref_set_key`` paths can't), or
+    None for inherited resources. ``copy`` (xref → new xref) first gives the
+    page its own /Resources and /XObject objects."""
+    t, v = doc.xref_get_key(page.xref, "Resources")
+    if t == "xref":
+        owner, prefix = int(_REF.findall(v)[0]), ""
+        if copy is not None:
+            owner = copy(owner)
+            doc.xref_set_key(page.xref, "Resources", f"{owner} 0 R")
+    elif t == "dict":
+        owner, prefix = page.xref, "Resources/"
+    else:
+        return None
+    t, v = doc.xref_get_key(owner, prefix + "XObject")
+    if t == "xref":
+        x = int(_REF.findall(v)[0])
+        if copy is not None:
+            x = copy(x)
+            doc.xref_set_key(owner, prefix + "XObject", f"{x} 0 R")
+        return x, ""
+    return owner, prefix + "XObject/"
+
+
+def delete_object(page: fitz.Page, object_id: str) -> None:
+    doc = page.parent
+    _xref, name = _find_object(page, object_id)
+    pattern = _do_pattern(name)
+    for x in page.get_contents():
+        data = doc.xref_stream(x)
+        stripped = pattern.sub(b"", data)
+        if stripped != data:
+            doc.update_stream(x, stripped)
+    where = _xobject_dict(doc, page)
+    if where is not None:
+        doc.xref_set_key(where[0], where[1] + name, "null")
+
+
+def unshare_objects(page: fitz.Page) -> None:
+    """Give ``page`` its own copies of the objects it draws. A duplicated
+    page shares /Resources (and so the forms) with its original, and moving
+    an object on one would move it on both."""
+    doc = page.parent
+    objects = _objects(page)
+    if not objects:
+        return
+
+    def copy(xref: int) -> int:
+        new = doc.get_new_xref()
+        doc.update_object(new, doc.xref_object(xref, compressed=False))
+        if doc.xref_is_stream(xref):
+            doc.update_stream(new, doc.xref_stream(xref))
+        return new
+
+    where = _xobject_dict(doc, page, copy)
+    if where is None:
+        return
+    for _oid, _kind, xref, name in objects:
+        form = copy(xref)
+        doc.xref_set_key(form, _OBJ_ID, f"/{new_object_id()}")
+        doc.xref_set_key(where[0], where[1] + name, f"{form} 0 R")
+
+
 # ------------------------------------------------------------------- edits
 def _apply_redaction(page: fitz.Page, rect: Rect, fill: Optional[Color]) -> None:
+    # objects entirely under the box go away instead of lingering as empty forms
+    covering = rect.inflated(2.0)
+    for obj in placed_objects(page):
+        if covering.contains(Point(obj.rect.x0, obj.rect.y0)) and \
+                covering.contains(Point(obj.rect.x1, obj.rect.y1)):
+            delete_object(page, obj.id)
     annot = page.add_redact_annot(_unrot(page, rect), fill=fill if fill is not None else False)
     if annot is None:
         raise EditError("Could not create the redaction")
@@ -206,26 +388,73 @@ def redact(page: fitz.Page, rect: Rect, fill: Optional[Color] = (0.0, 0.0, 0.0))
     _apply_redaction(page, rect, fill)
 
 
+def _text_font(page: fitz.Page, alias: str, text: str) -> str:
+    """Font to set ``text`` in: the base-14 font itself when its one-byte
+    encoding covers the text, else the same typeface embedded as a Unicode
+    font (MuPDF's base-14 fonts have Latin, Greek and Cyrillic glyphs; the
+    one-byte encoding would turn e.g. Cyrillic into "?")."""
+    if all(ord(c) < 256 for c in text):
+        return alias
+    name = f"{alias}-u"
+    page.insert_font(fontname=name, fontbuffer=fitz.Font(alias).buffer)
+    return name
+
+
+def _text_bounds(page: fitz.Page) -> Optional[fitz.Rect]:
+    box = None
+    for block in page.get_text("dict").get("blocks", ()):
+        for line in block.get("lines", ()):
+            for span in line.get("spans", ()):
+                if span.get("text", "").strip():
+                    r = fitz.Rect(span["bbox"])
+                    box = r if box is None else box | r
+    if box is None:
+        return None
+    return fitz.Rect(box.x0 - 1.5, box.y0 - 1, box.x1 + 1.5, box.y1 + 1) & page.rect
+
+
 def replace_text(page: fitz.Page, rect: Rect, text: str, style: TextStyle,
-                 fill: Optional[Color] = None, align: int = 0, min_size: float = 4.0) -> float:
-    """Redact ``rect`` and set ``text`` inside it. The font shrinks until the
+                 fill: Optional[Color] = None, align: int = 0, min_size: float = 4.0,
+                 object_id: Optional[str] = None) -> float:
+    """Redact ``rect`` and set ``text`` inside it, as a placed object
+    (``object_id``) cut to the text's extent. The font shrinks until the
     text fits the box. Returns the font size used."""
     if rect.is_empty:
         raise EditError("Nothing to replace")
     _apply_redaction(page, rect, fill if fill is not None else style.background)
     if not text.strip():
         return style.font_size
-    box = _unrot(page, rect.inflated(0.6))
+    box = rect.inflated(0.6)
     size = max(min_size, float(style.font_size))
-    while True:
-        # dry run in a scratch shape so a failed fit leaves no trace
-        shape = page.new_shape()
-        rc = shape.insert_textbox(box, text, fontsize=size, fontname=style.font_name,
-                                  color=style.color, align=align, rotate=page.rotation)
-        if rc >= 0 or size <= min_size:
-            shape.commit()
-            return size
-        size = max(min_size, round(size * 0.92, 1))
+    # laid out upright on a scratch page: the box plus a margin, so that
+    # descenders and overhangs past the box are not cut off
+    margin = 4.0 + size
+    descender = abs(fitz.Font(style.font_name).descender)
+    src = fitz.open()
+    try:
+        scratch = src.new_page(width=box.width + 2 * margin, height=box.height + 2 * margin)
+        font = _text_font(scratch, style.font_name, text)
+        while True:
+            # the box is a line box, but PyMuPDF also reserves a descender
+            # below the last line: give that back
+            area = fitz.Rect(margin, margin, margin + box.width,
+                             margin + box.height + descender * size)
+            # dry run in a scratch shape so a failed fit leaves no trace
+            shape = scratch.new_shape()
+            rc = shape.insert_textbox(area, text, fontsize=size, fontname=font,
+                                      color=style.color, align=align)
+            if rc >= 0 or size <= min_size:
+                shape.commit()
+                break
+            size = max(min_size, round(size * 0.92, 1))
+        ink = _text_bounds(scratch)
+        if ink is not None:
+            dx, dy = box.x0 - margin, box.y0 - margin
+            target = Rect(ink.x0 + dx, ink.y0 + dy, ink.x1 + dx, ink.y1 + dy)
+            _show_object(page, src, ink, target, "Text", object_id or new_object_id())
+    finally:
+        src.close()
+    return size
 
 
 def load_image_bytes(image: Union[bytes, str]) -> bytes:
@@ -253,16 +482,29 @@ def load_image_bytes(image: Union[bytes, str]) -> bytes:
 
 
 def place_image(page: fitz.Page, rect: Rect, image: Union[bytes, str], keep_aspect: bool = True,
-                cover: bool = True, fill: Optional[Color] = (1.0, 1.0, 1.0)) -> None:
-    """Optionally redact/whiten ``rect``, then draw ``image`` (bytes or a
-    file path) into it, fitted (``keep_aspect``) or stretched."""
+                cover: bool = True, fill: Optional[Color] = (1.0, 1.0, 1.0),
+                object_id: Optional[str] = None, replaces: Optional[str] = None) -> None:
+    """Draw ``image`` (bytes or a file path) into ``rect`` as a placed
+    object, fitted (``keep_aspect``) or stretched. ``cover`` first redacts
+    and whitens ``rect`` (hiding an image being replaced); ``replaces``
+    deletes that placed object first."""
     if rect.is_empty:
         raise EditError("Choose an area for the image")
     data = load_image_bytes(image)
+    if replaces:
+        delete_object(page, replaces)
     if cover:
         _apply_redaction(page, rect, fill)
-    page.insert_image(_unrot(page, rect), stream=data, keep_proportion=keep_aspect,
-                      rotate=page.rotation)
+    if keep_aspect:
+        pix = fitz.Pixmap(data)
+        rect = fit_into(rect, pix.width / pix.height)
+    src = fitz.open()
+    try:
+        scratch = src.new_page(width=rect.width, height=rect.height)
+        scratch.insert_image(scratch.rect, stream=data, keep_proportion=False)
+        _show_object(page, src, scratch.rect, rect, "Image", object_id or new_object_id())
+    finally:
+        src.close()
 
 
 def image_rects(page: fitz.Page) -> List[Tuple[Rect, int, int]]:

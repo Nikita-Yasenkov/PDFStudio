@@ -4,7 +4,7 @@ from .engine import ENGINE_LOCK, PdfDocument, library_versions, open_document
 from .errors import (AnnotationError, EditError, PageOperationError,
                      PasswordRequiredError, PdfError, PdfOpenError, PdfSaveError)
 from .models import (AnnotationKind, AnnotationModel, Color, ImageInfo,
-                     OutlineEntry, PageInfo, Point, Rect, RenderedImage,
+                     OutlineEntry, PageInfo, PlacedObject, Point, Rect, RenderedImage,
                      SaveResult, SearchHit, TextStyle, Word)
 
 __all__ = [
@@ -12,6 +12,6 @@ __all__ = [
     "AnnotationError", "EditError", "PageOperationError", "PasswordRequiredError",
     "PdfError", "PdfOpenError", "PdfSaveError",
     "AnnotationKind", "AnnotationModel", "Color", "ImageInfo", "OutlineEntry",
-    "PageInfo", "Point", "Rect", "RenderedImage", "SaveResult", "SearchHit",
+    "PageInfo", "PlacedObject", "Point", "Rect", "RenderedImage", "SaveResult", "SearchHit",
     "TextStyle", "Word",
 ]

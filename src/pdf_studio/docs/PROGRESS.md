@@ -73,7 +73,16 @@ the development setup).
 | 41 | Signature ink-capture dialog | done | draw pad: smoothing, ink colors/widths, undo, save for reuse |
 | 42 | Milestone 5 tests | done | `tests/test_milestone5.py` |
 
-**Totals:** 42/42 tickets · 368 automated tests (`python -m pytest -q`, ~50 s).
+**Totals:** 42/42 tickets · 382 automated tests (`python -m pytest -q`, ~55 s).
+
+## Beyond the tickets — editing
+
+- Replacement text in any script the base-14 typefaces cover (Latin, Greek, Cyrillic):
+  text the one-byte encoding can't hold is set in an embedded Unicode copy of the same
+  typeface, instead of turning into “?”.
+- Replacement text and placed images are movable objects: after Edit Text or Image the
+  new item is selected (like a placed signature); drag to move, corners to resize, arrow
+  keys to nudge, Delete to remove. They stay page content (`tests/test_placed_objects.py`).
 
 ## Beyond the tickets — Windows desktop install
 
