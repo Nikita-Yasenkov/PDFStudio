@@ -107,13 +107,29 @@ text layer simply have nothing to select.
 | Feature | Mechanism | Undo strategy |
 |---|---|---|
 | Highlight / underline / strikeout / squiggly, notes, free text, ink, shapes, line/arrow, stamps & signatures | Native PDF annotations via PyMuPDF (`add_*_annot`) | Model snapshots. Annotations are identified by their `/NM` id, which is re-applied when an annotation is recreated, so later commands keep working. Moving ink/line recreates with translated vertices (MuPDF forbids `set_rect` on them). |
-| Redact & replace text, redact (black box), image cover/replace | Real content edits: `apply_redactions` (text removed, images and vector art untouched) + `insert_textbox` / `insert_image` | **Content snapshot**: before the edit, the page's `/Contents` and `/Resources` entries plus every content stream and form XObject reachable from them are captured (source + decompressed bytes). Undo writes them back. |
+| Redact & replace text, redact (black box), image cover/replace, moving/resizing/deleting placed text and images | Real content edits: `apply_redactions` (text removed, images and vector art untouched); new text and images are *placed objects* (tagged Form XObjects via `show_pdf_page`) | **Content snapshot**: before the edit, the page's `/Contents` and `/Resources` entries plus every content stream and form XObject reachable from them are captured (source + decompressed bytes). Undo writes them back. |
 | Page rotate / delete / duplicate / move / insert / insert-from-PDF | `set_rotation`, `delete_page`, `fullcopy_page`, `select` (permutation), `new_page`, `insert_pdf` | Inverse operation; deleted pages are kept as a one-page PDF in memory and re-inserted, and the outline (TOC) is restored. |
 
 Redaction is real: the replaced text is removed from the content stream,
 so it no longer appears in search or extraction. Replacement is **box
-bound**, with no reflow: the new text is set in a base-14 font with the
-probed size/colour inside the original box.
+bound**, with no reflow: the new text is set in a base-14 typeface with the
+probed size/colour inside the original box. Text the one-byte base-14
+encoding can't hold (Cyrillic, Greek, “smart” punctuation, €) is set in the
+same typeface embedded as a Unicode font (MuPDF's built-in base-14 fonts
+have those glyphs).
+
+**Placed objects.** Replacement text and placed images are laid out upright
+on a scratch page and drawn onto the page as their own Form XObject, tagged
+`/PDFStudioKind` (`/Text` or `/Image`) and `/PDFStudioId`. They are page
+content (searchable, printed, kept by other viewers), yet the Select tool
+can move them (rewrite the form's `/Matrix`), resize them by the corners
+(aspect kept) and delete them (drop the `Do` from the page content), all
+undone by content snapshots. MuPDF renames or copies forms when it rewrites
+a page (a later redaction), so objects are found by their tag id, never by
+resource name or xref; the tags survive saving and reopening. Duplicating a
+page shares `/Resources` with the original, so the copy gets its own forms
+(`editing.unshare_objects`). A redaction that fully covers a placed object
+deletes it.
 
 Visual signatures are **image stamp annotations**, not cryptographic
 signatures. PKI signing is out of scope.
@@ -144,7 +160,9 @@ session/engine API. Each tab has its own stack.
 ## 9. Known limitations
 
 * No text reflow or true in-place font editing. Replacement text uses a
-  base-14 font sized to the original box.
+  base-14 typeface sized to the original box; scripts beyond Latin, Greek
+  and Cyrillic (e.g. CJK) have no glyphs in it. Resizing placed text scales
+  it; it isn't re-wrapped.
 * Word-granular selection, with no OCR for scanned pages.
 * Undoing a page deletion restores page content, annotations and outline
   entries, but links on *other* pages that pointed to the deleted page are not

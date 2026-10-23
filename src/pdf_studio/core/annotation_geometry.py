@@ -94,7 +94,21 @@ def handles(m: AnnotationModel) -> List[Tuple[str, Point]]:
 
 
 def handle_at(m: AnnotationModel, p: Point, tol: float) -> Optional[str]:
-    for name, hp in handles(m):
+    return _nearest(handles(m), p, tol)
+
+
+def corner_handles(r: Rect) -> List[Tuple[str, Point]]:
+    """Corner handles of placed text/images (resizing keeps the aspect)."""
+    return [("nw", Point(r.x0, r.y0)), ("ne", Point(r.x1, r.y0)),
+            ("se", Point(r.x1, r.y1)), ("sw", Point(r.x0, r.y1))]
+
+
+def corner_handle_at(r: Rect, p: Point, tol: float) -> Optional[str]:
+    return _nearest(corner_handles(r), p, tol)
+
+
+def _nearest(points: Sequence[Tuple[str, Point]], p: Point, tol: float) -> Optional[str]:
+    for name, hp in points:
         if abs(hp.x - p.x) <= tol and abs(hp.y - p.y) <= tol:
             return name
     return None

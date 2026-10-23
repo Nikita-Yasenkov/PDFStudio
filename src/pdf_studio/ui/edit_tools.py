@@ -129,6 +129,15 @@ class ContentTool(Tool):
     def cancel(self) -> bool:
         return self.text.cancel() or self.area.cancel()
 
+    def select_placed(self, page: int, object_id: str) -> bool:
+        """Hand over to Select with the new text/image selected, ready to
+        drag or resize (as after placing a signature)."""
+        if self.session.placed_object(self.session.page_id(page), object_id) is None:
+            return False
+        self.ctl.set_tool("select")
+        self.view.select_object(page, object_id)
+        return True
+
     # subclasses
     def apply(self, sel: TextSelection) -> bool:
         raise NotImplementedError
@@ -161,11 +170,16 @@ class EditTextTool(ContentTool):
         cmd = ReplaceTextCommand(self.session.page_id(page), rect, text, new_style,
                                  fill=style.background, align=align,
                                  label="Replace text" if text.strip() else "Erase text")
-        ok = self.view.execute(cmd)
-        if ok and cmd.shrunk:
+        if not self.view.execute(cmd):
+            return False
+        placed = self.select_placed(page, cmd.object_id)
+        if cmd.shrunk:
             self.view.toast(f"Text reduced to {cmd.font_size_used:g} pt to fit the box",
                             "Undo", self.view.undo)
-        return ok
+        elif placed:
+            self.view.toast("Text placed — drag to move, corners to resize", "Undo",
+                            self.view.undo)
+        return True
 
     def paint(self, p, canvas, slots) -> None:
         t = theme.current()
@@ -215,22 +229,26 @@ class ImageTool(ContentTool):
     icon = "image"
     shortcut = "G"
     hint = ("Click an image on the page to replace it, or drag a box to place a new image. "
-            "What's under the box is covered.")
+            "Placed images can be moved and resized afterwards.")
     applies_to_selection = False
     keeps_text_selection = False
 
     def __init__(self, controller):
         super().__init__(controller)
-        self.hover: Optional[Tuple[int, Rect]] = None
+        #: (page, rect, placed object id or None for an image of the original page)
+        self.hover: Optional[Tuple[int, Rect, Optional[str]]] = None
 
-    def _image_at(self, wp: QPointF) -> Optional[Tuple[int, Rect]]:
+    def _image_at(self, wp: QPointF) -> Optional[Tuple[int, Rect, Optional[str]]]:
         hit = self.canvas.page_at(wp)
         if hit is None:
             return None
         page, p = hit
+        for obj in reversed(self.session.placed_objects(page)):
+            if obj.kind == "image" and obj.rect.contains(p):
+                return page, obj.rect, obj.id
         for info in reversed(self.session.image_rects(page)):
             if info.rect.contains(p):
-                return page, info.rect
+                return page, info.rect, None
         return None
 
     def mouse_press(self, e):
@@ -262,12 +280,15 @@ class ImageTool(ContentTool):
         if res is None:  # a click: replace the image under the cursor, if any
             target = self._image_at(e.position())
             if target is not None:
-                self.apply_rect(*target)
+                page, rect, object_id = target
+                # a placed image is swapped out; one of the page's own is covered
+                self.apply_rect(page, rect, replaces=object_id, cover=object_id is None)
             return True
         self.apply_rect(*res)
         return True
 
-    def apply_rect(self, page: int, rect: Rect) -> bool:
+    def apply_rect(self, page: int, rect: Rect, replaces: Optional[str] = None,
+                   cover: bool = False) -> bool:
         from ..pdf.editing import load_image_bytes
         from ..pdf.errors import EditError
         path = prompts.ask_open_image(self.view, "", "Choose an image")
@@ -278,11 +299,16 @@ class ImageTool(ContentTool):
         except EditError as exc:
             prompts.show_error(self.view, "Can't use this image", str(exc))
             return False
-        ok = self.view.execute(PlaceImageCommand(self.session.page_id(page), rect, data))
-        if ok:
-            self.hover = None
-            self.view.toast("Image placed", "Undo", self.view.undo)
-        return ok
+        replacing = cover or replaces is not None
+        cmd = PlaceImageCommand(self.session.page_id(page), rect, data, cover=cover,
+                                replaces=replaces,
+                                label="Replace image" if replacing else "Place image")
+        if not self.view.execute(cmd):
+            return False
+        self.hover = None
+        self.select_placed(page, cmd.object_id)
+        self.view.toast("Image placed — drag to move, corners to resize", "Undo", self.view.undo)
+        return True
 
     def apply(self, sel) -> bool:
         return False
@@ -294,7 +320,7 @@ class ImageTool(ContentTool):
     def paint(self, p, canvas, slots) -> None:
         t = theme.current()
         if self.hover is not None and not self.area.active:
-            page, r = self.hover
+            page, r, _object_id = self.hover
             wr = canvas.pdf_rect_to_widget(page, r)
             if wr is not None:
                 p.save()

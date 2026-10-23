@@ -18,12 +18,13 @@ from PyQt6.QtGui import QCursor, QKeyEvent, QMouseEvent, QPainter
 from PyQt6.QtWidgets import QApplication, QMenu, QToolTip
 
 from ..core.annotation_commands import AddAnnotationCommand, UpdateAnnotationCommand
-from ..core.annotation_geometry import (apply_handle, clamp_delta, cursor_for_handle,
-                                        handle_at, hit_test)
+from ..core.annotation_geometry import (apply_handle, clamp_delta, corner_handle_at,
+                                        cursor_for_handle, handle_at, hit_test, resize_rect)
+from ..core.edit_commands import TransformObjectCommand
 from ..core.layout import Slot
 from ..core.selection import (TextSelection, is_near_text, select_between,
                               select_line, select_word, word_at)
-from ..pdf.models import AnnotationKind, AnnotationModel, Point, Rect
+from ..pdf.models import AnnotationKind, AnnotationModel, PlacedObject, Point, Rect
 from .icons import icons
 from .tool_defaults import ToolDefaults
 
@@ -184,8 +185,8 @@ class SelectTool(Tool):
     label = "Select"
     icon = "select"
     shortcut = "V"
-    hint = ("Click annotations to select, drag to move, double-click to edit. "
-            "Drag over text to select it. Hold Space to pan.")
+    hint = ("Click annotations or added text and images to select, drag to move. "
+            "Double-click to edit. Drag over text to select it. Hold Space to pan.")
     cursor = Qt.CursorShape.ArrowCursor
     keeps_text_selection = True
     DRAG_START = 3.0  # px before a press becomes a drag
@@ -200,6 +201,7 @@ class SelectTool(Tool):
         self._press_pt: Optional[Point] = None
         self._page = -1
         self._model: Optional[AnnotationModel] = None
+        self._object: Optional[PlacedObject] = None  # placed text/image instead of _model
         self._handle = ""
         self.preview: Optional[AnnotationModel] = None
 
@@ -226,6 +228,35 @@ class SelectTool(Tool):
         h = handle_at(m, p, self._tol() * 1.2)
         return (page, m, h) if h else None
 
+    def _object_hit(self, wp: QPointF):
+        hit = self.canvas.page_at(wp)
+        if hit is None:
+            return None
+        page, p = hit
+        for obj in reversed(self.session.placed_objects(page)):
+            if obj.rect.inflated(self._tol() * 0.5).contains(p):
+                return page, p, obj
+        return None
+
+    def _annotation_or_object_hit(self, wp: QPointF):
+        """(annotation hit, object hit), at most one set. Annotations are on
+        top, except that placed text under a highlight is what gets dragged."""
+        ah, oh = self._annotation_hit(wp), self._object_hit(wp)
+        if ah is not None and oh is not None and ah[2].kind.is_text_markup:
+            ah = None
+        return ah, (oh if ah is None else None)
+
+    def _selected_object_handle(self, wp: QPointF):
+        sel = self.view.selected_placed_object()
+        if sel is None:
+            return None
+        page, obj = sel
+        p = self.canvas.widget_to_pdf(page, wp)
+        if p is None:
+            return None
+        h = corner_handle_at(obj.rect, p, self._tol() * 1.2)
+        return (page, obj, h) if h else None
+
     def _is_triple_click(self, e) -> bool:
         t, pos = self._last_double
         return (time.monotonic() - t < QApplication.doubleClickInterval() / 1000
@@ -245,18 +276,36 @@ class SelectTool(Tool):
         handle = self._selected_handle(wp)
         if handle is not None:
             self._page, self._model, self._handle = handle
+            self._object = None
             self._press_pt = self.canvas.widget_to_pdf(self._page, wp)
             self._mode = "resize"
             return True
-        ah = self._annotation_hit(wp)
+        handle = self._selected_object_handle(wp)
+        if handle is not None:
+            self._page, self._object, self._handle = handle
+            self._model = None
+            self._press_pt = self.canvas.widget_to_pdf(self._page, wp)
+            self._mode = "resize"
+            return True
+        ah, oh = self._annotation_or_object_hit(wp)
         if ah is not None:
             page, p, m = ah
             self.view.clear_selection()
             self.view.select_annotation(page, m.id)
             self._page, self._model, self._press_pt = page, m, p
+            self._object = None
             self._mode = "markup" if m.kind.is_text_markup else ("pending" if m.can_move else "")
             return True
+        if oh is not None:
+            page, p, obj = oh
+            self.view.clear_selection()
+            self.view.select_object(page, obj.id)
+            self._page, self._object, self._press_pt = page, obj, p
+            self._model = None
+            self._mode = "pending"
+            return True
         self.view.clear_annotation_selection()
+        self.view.clear_object_selection()
         if page_hit is not None and self.text.begin(page_hit[0], page_hit[1]):
             self.canvas.viewport().setCursor(Qt.CursorShape.IBeamCursor)
             return True
@@ -283,15 +332,23 @@ class SelectTool(Tool):
                 p = self.canvas.widget_to_pdf(self._page, wp)
                 dx, dy = p.x - self._press_pt.x, p.y - self._press_pt.y
                 pw, ph = self.session.page_size(self._page)
-                dx, dy = clamp_delta(self._model.rect, dx, dy, pw, ph)
-                self._set_preview(self._model.translated(dx, dy))
+                if self._object is not None:
+                    dx, dy = clamp_delta(self._object.rect, dx, dy, pw, ph)
+                    self._set_object_preview(self._object.rect.translated(dx, dy))
+                else:
+                    dx, dy = clamp_delta(self._model.rect, dx, dy, pw, ph)
+                    self._set_preview(self._model.translated(dx, dy))
                 self.canvas.viewport().setCursor(Qt.CursorShape.SizeAllCursor)
             elif self._mode == "resize":
                 p = self.canvas.widget_to_pdf(self._page, wp)
                 pw, ph = self.session.page_size(self._page)
                 p = Point(min(max(p.x, 0.0), pw), min(max(p.y, 0.0), ph))
-                keep = bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-                self._set_preview(apply_handle(self._model, self._handle, p, keep))
+                if self._object is not None:
+                    self._set_object_preview(resize_rect(self._object.rect, self._handle, p,
+                                                         keep_aspect=True))
+                else:
+                    keep = bool(e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                    self._set_preview(apply_handle(self._model, self._handle, p, keep))
             return True
         if not e.buttons():
             self._update_hover(wp)
@@ -305,8 +362,17 @@ class SelectTool(Tool):
             self._update_hover(e.position())
             return True
         mode, preview, model = self._mode, self.preview, self._model
+        obj, obj_preview = self._object, self.view.object_preview
         self._mode = ""
         self._set_preview(None)
+        self._set_object_preview(None)
+        if mode in ("move", "resize") and obj is not None and obj_preview is not None:
+            verb = "Move" if mode == "move" else "Resize"
+            self.view.execute(TransformObjectCommand(
+                self.session.page_id(self._page), obj.id, obj_preview[1],
+                f"{verb} {obj.label.lower()}"))
+            self._update_hover(e.position())
+            return True
         if mode in ("move", "resize") and preview is not None and model is not None:
             label = "Move annotation" if mode == "move" else "Resize annotation"
             self.view.execute(UpdateAnnotationCommand(
@@ -335,16 +401,22 @@ class SelectTool(Tool):
         self.view.annotation_preview = (self._page, m) if m is not None else None
         self.canvas.viewport().update()
 
+    def _set_object_preview(self, r: Optional[Rect]) -> None:
+        self.view.object_preview = (self._page, r) if r is not None else None
+        self.canvas.viewport().update()
+
     def _update_hover(self, wp: QPointF) -> None:
         vp = self.canvas.viewport()
-        handle = self._selected_handle(wp)
+        handle = self._selected_handle(wp) or self._selected_object_handle(wp)
         if handle is not None:
             vp.setCursor(_HANDLE_CURSORS.get(cursor_for_handle(handle[2]), Qt.CursorShape.ArrowCursor))
             self.view.set_hover_annotation(None)
+            self.view.set_hover_object(None)
             return
-        ah = self._annotation_hit(wp)
+        ah, oh = self._annotation_or_object_hit(wp)
         if ah is not None:
             page, _p, m = ah
+            self.view.set_hover_object(None)
             self.view.set_hover_annotation((self.session.page_id(page), m.id))
             vp.setCursor(Qt.CursorShape.SizeAllCursor if m.can_move and self.view.is_annotation_selected(page, m.id)
                          else Qt.CursorShape.PointingHandCursor)
@@ -359,6 +431,13 @@ class SelectTool(Tool):
             return
         QToolTip.hideText()
         self.view.set_hover_annotation(None)
+        if oh is not None:
+            page, _p, obj = oh
+            self.view.set_hover_object((self.session.page_id(page), obj.id))
+            vp.setCursor(Qt.CursorShape.SizeAllCursor if self.view.is_object_selected(page, obj.id)
+                         else Qt.CursorShape.PointingHandCursor)
+            return
+        self.view.set_hover_object(None)
         hit = self.canvas.page_at(wp)
         on_text = hit is not None and word_at(self.session.words(hit[0]), hit[1]) is not None
         vp.setCursor(Qt.CursorShape.IBeamCursor if on_text else self.cursor)
@@ -367,7 +446,7 @@ class SelectTool(Tool):
     def key_press(self, e) -> bool:
         sel = self.view.selected_annotation()
         if sel is None:
-            return False
+            return self._object_key_press(e)
         page, m = sel
         key = e.key()
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
@@ -376,11 +455,9 @@ class SelectTool(Tool):
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.view.edit_annotation(page, m)
             return True
-        arrows = {Qt.Key.Key_Left: (-1, 0), Qt.Key.Key_Right: (1, 0),
-                  Qt.Key.Key_Up: (0, -1), Qt.Key.Key_Down: (0, 1)}
-        if key in arrows and m.can_move:
+        if key in _ARROWS and m.can_move:
             step = 10.0 if e.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1.0
-            dx, dy = arrows[key]
+            dx, dy = _ARROWS[key]
             pw, ph = self.session.page_size(page)
             dx, dy = clamp_delta(m.rect, dx * step, dy * step, pw, ph)
             self.view.execute(UpdateAnnotationCommand(self.session.page_id(page), m.id,
@@ -389,16 +466,50 @@ class SelectTool(Tool):
             return True
         return False
 
+    def deactivate(self) -> None:
+        super().deactivate()
+        self.view.set_hover_annotation(None)
+        self.view.set_hover_object(None)
+
+    def _object_key_press(self, e) -> bool:
+        sel = self.view.selected_placed_object()
+        if sel is None:
+            return False
+        page, obj = sel
+        key = e.key()
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.view.delete_selected_object()
+            return True
+        if key in _ARROWS:
+            step = 10.0 if e.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1.0
+            dx, dy = _ARROWS[key]
+            pw, ph = self.session.page_size(page)
+            dx, dy = clamp_delta(obj.rect, dx * step, dy * step, pw, ph)
+            self.view.execute(TransformObjectCommand(self.session.page_id(page), obj.id,
+                                                     obj.rect.translated(dx, dy),
+                                                     f"Nudge {obj.label.lower()}",
+                                                     merge_key="nudge"))
+            return True
+        return False
+
     def cancel(self) -> bool:
         if self._mode:
             self._mode = ""
             self._set_preview(None)
+            self._set_object_preview(None)
             return True
         return self.text.cancel()
 
     def context_menu(self, e, menu) -> None:
-        ah = self._annotation_hit(e.position() if hasattr(e, "position") else QPointF(e.pos()))
+        pos = e.position() if hasattr(e, "position") else QPointF(e.pos())
+        ah, oh = self._annotation_or_object_hit(pos)
         if ah is None:
+            if oh is not None:
+                page, _p, obj = oh
+                self.view.select_object(page, obj.id)
+                menu.addAction(icons.icon("delete"), f"Delete {obj.label}",
+                               self.view.delete_selected_object)
+                menu.addSeparator()
             return
         page, _p, m = ah
         self.view.select_annotation(page, m.id)
@@ -410,6 +521,9 @@ class SelectTool(Tool):
         menu.addAction("Properties…", self.view.show_properties)
         menu.addSeparator()
 
+
+_ARROWS = {Qt.Key.Key_Left: (-1, 0), Qt.Key.Key_Right: (1, 0),
+           Qt.Key.Key_Up: (0, -1), Qt.Key.Key_Down: (0, 1)}
 
 _HANDLE_CURSORS = {
     "fdiag": Qt.CursorShape.SizeFDiagCursor, "bdiag": Qt.CursorShape.SizeBDiagCursor,
@@ -666,9 +780,10 @@ class ToolController(QObject):
         if self.view.text_selection is not None:
             self.view.clear_selection()
             return
-        clear_annot = getattr(self.view, "clear_annotation_selection", None)
-        if clear_annot is not None and clear_annot():
-            return
+        for name in ("clear_annotation_selection", "clear_object_selection"):
+            clear = getattr(self.view, name, None)
+            if clear is not None and clear():
+                return
         if self.active_name not in ("select", ""):
             self.set_tool("select")
 

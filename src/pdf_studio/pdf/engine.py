@@ -25,8 +25,8 @@ from . import editing as _edit
 from . import page_operations as _pages
 from . import text as _text
 from .errors import PasswordRequiredError, PdfOpenError, PdfSaveError
-from .models import (AnnotationModel, ImageInfo, OutlineEntry, PageInfo, Point, Rect,
-                     RenderedImage, SaveResult, SearchHit, TextStyle, Word)
+from .models import (AnnotationModel, ImageInfo, OutlineEntry, PageInfo, PlacedObject, Point,
+                     Rect, RenderedImage, SaveResult, SearchHit, TextStyle, Word)
 
 #: Global lock serialising all MuPDF access (all documents, all threads).
 ENGINE_LOCK = threading.RLock()
@@ -444,9 +444,11 @@ class PdfDocument:
 
     @locked
     def replace_text(self, index: int, rect: Rect, text: str, style: TextStyle,
-                     fill: Optional[tuple] = None, align: int = 0) -> float:
+                     fill: Optional[tuple] = None, align: int = 0,
+                     object_id: Optional[str] = None) -> float:
         try:
-            size = _edit.replace_text(self._page(index), rect, text, style, fill, align)
+            size = _edit.replace_text(self._page(index), rect, text, style, fill, align,
+                                      object_id=object_id)
             self.requires_full_save = True
             return size
         finally:
@@ -454,9 +456,11 @@ class PdfDocument:
 
     @locked
     def place_image(self, index: int, rect: Rect, image: bytes, keep_aspect: bool = True,
-                    cover: bool = True, fill: Optional[tuple] = (1.0, 1.0, 1.0)) -> None:
+                    cover: bool = True, fill: Optional[tuple] = (1.0, 1.0, 1.0),
+                    object_id: Optional[str] = None, replaces: Optional[str] = None) -> None:
         try:
-            _edit.place_image(self._page(index), rect, image, keep_aspect, cover, fill)
+            _edit.place_image(self._page(index), rect, image, keep_aspect, cover, fill,
+                              object_id=object_id, replaces=replaces)
             if cover:
                 self.requires_full_save = True
         finally:
@@ -465,6 +469,25 @@ class PdfDocument:
     @locked
     def image_rects(self, index: int) -> List[ImageInfo]:
         return [ImageInfo(r, w, h) for r, w, h in _edit.image_rects(self._page(index))]
+
+    @locked
+    def placed_objects(self, index: int) -> List[PlacedObject]:
+        """Replacement text and images placed on a page (topmost last)."""
+        return _edit.placed_objects(self._page(index))
+
+    @locked
+    def transform_object(self, index: int, object_id: str, rect: Rect) -> None:
+        try:
+            _edit.transform_object(self._page(index), object_id, rect)
+        finally:
+            self.invalidate_page(index)
+
+    @locked
+    def delete_object(self, index: int, object_id: str) -> None:
+        try:
+            _edit.delete_object(self._page(index), object_id)
+        finally:
+            self.invalidate_page(index)
 
     # ------------------------------------------------------------------ save
     @locked
