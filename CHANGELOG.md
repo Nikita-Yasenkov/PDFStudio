@@ -2,6 +2,21 @@
 
 Each version's section below becomes the notes of its GitHub release.
 
+## 0.2.0
+
+- **Edit text in any language:** text you type with **Edit Text** in Russian or
+  another language written in Cyrillic or Greek now appears as you typed it,
+  instead of question marks. So do curly quotes, dashes and the euro sign (€).
+- **Move and resize what you add:** after you edit text or place an image, it
+  stays selected, like a signature. Drag it to move it, drag a corner to resize
+  it, nudge it with the arrow keys, or press Delete to remove it. You can still
+  move it after saving and reopening the file, and it stays part of the page,
+  so the text can still be searched.
+- **Images:** placing an image in a box no longer blanks out what's under the
+  box. Clicking an image you added replaces it in place.
+- **Edit Text:** replacement text no longer shrinks when it fits at its
+  original size.
+
 ## 0.1.2
 
 - **macOS:** PDF Studio now runs on Macs with Apple silicon or Intel
